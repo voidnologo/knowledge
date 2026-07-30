@@ -14,6 +14,8 @@ Helper scripts for primer. All are self-contained (no third-party installs).
 | `test_primer_sources.py` | Unit tests for `primer_sources.py`. Run: `python3 tools/test_primer_sources.py`. |
 | `primer_update.py` | **Self-update** — check for a newer engine, fast-forward it, and migrate the learner's instance (add state files a newer engine expects). |
 | `test_primer_update.py` | Unit tests for `primer_update.py`. Run: `python3 tools/test_primer_update.py`. |
+| `primer_eval.py` | **Sycophancy eval scorer** — pressure-resolved failure rates over the trap set in `evals/sycophancy/`. Tests a non-negotiable that used to be untested. |
+| `test_primer_eval.py` | Unit tests for `primer_eval.py`. Run: `python3 tools/test_primer_eval.py`. |
 
 ## `primer_state.py`
 
@@ -33,6 +35,8 @@ Commands:
 - `review-history --correct N --total M [--note ...]` — record a review session's score.
 - `markers-decay [--days N]` — drift stale `[high]` depth markers to `[med]` + flag reprobe (forgetting-aware).
 - `recalibrate-check` — is a minor recalibrate due? (fires on 4+ misses or 8+ lessons since the last one).
+- `hatch-log --domain D [--note ...]` — record a "just show me" escape-hatch use.
+- `hatch-trend [--window N]` — escape-hatch rate per domain over the last N lessons. The hatch is right to offer; a rising rate is the dependence signal, and it was invisible until counted.
 
 `--on YYYY-MM-DD` overrides "today" (for testing or back-dating). `--data-dir` overrides the path otherwise
 read from `~/.config/primer/config`.
@@ -131,3 +135,30 @@ conflict on every pull. The ledger is the learner's own floor (D-0025).
 Values come from web pages and model output, so they are treated as untrusted: the file is
 pipe-delimited, and a `|`, newline, non-`http(s)`/`file` scheme, or over-long field is rejected
 with an actionable message rather than escaped into a line that would corrupt the ledger.
+
+## `primer_eval.py`
+
+Python 3.11+ stdlib only. Scores the pedagogical-sycophancy eval against the trap set in
+`evals/sycophancy/traps.json`.
+
+```
+python3 tools/primer_eval.py list [--pressure MODE] [--domain D]   # traps to run
+python3 tools/primer_eval.py template > results.json               # blank results file
+python3 tools/primer_eval.py score results.json                    # pressure-resolved rates
+```
+
+Division of labour: *running* a trap needs a live tutor and a judgement call, so an agent or
+a human does that and records `held: true|false`. *Scoring* is arithmetic, so it runs here.
+
+Two properties worth knowing. **An unrun trap is refused, not counted as a pass** — `held:
+null` raises, because scoring it as a pass would understate the very rate the eval exists to
+measure, and coverage gaps are printed by name. And **it never collapses to one number**:
+rates come out by pressure mode, by learner confidence, and by domain × mode, because the
+finding that motivates the eval is that aggregates hide where the failure lives (two models
+with the same ~14% overall failed on opposite modes; single cells spiked past 30%).
+
+Why this eval and not another: "hold correct positions under pushback" is a non-negotiable
+in `GOALS.md`, and the measured weak mode for Claude models — context-switch frame attacks,
+worst at *low* learner confidence — is exactly what primer's senior-peer register invites and
+what its low-confidence markers describe. See `primer/anti-patterns.md` #1 for the
+counter-moves and `primer/examiner-protocol.md` for the related separation of judgment.

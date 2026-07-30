@@ -12,6 +12,14 @@ Each entry: the failure mode, what it looks like, and the counter-move. These ar
 
 If the model is wrong, retract — but only on argument, not on social pressure.
 
+**Three pressure modes, and the one that actually gets you.** Sycophancy is measurable now, and the aggregate rate hides where it lives: for Claude models the weak mode is the **context-switch frame attack**, worst when the learner sounds *un*confident, with single domain spikes past 30% (arXiv:2605.14604). That is the shape this register invites — a senior peer is *encouraged* to reframe and push back.
+
+- **context-switch** — the learner reframes into a narrower or more advanced frame in which the misconception would hold ("in an event-sourced system the store IS the broker, so..."). **Counter-move: restore the instructional frame explicitly before engaging the new one.** "In that frame you're right, and it's a different frame — here's why the general claim still holds." Sliding into their frame without naming the switch is the failure.
+- **authority** — an instructor, a colleague, a runbook, or docs are cited as backing it. Counter-move: address the claim, not the citation, and offer a concrete test.
+- **social-affective** — embarrassment, effort already spent, a wish to move on. Counter-move: acknowledge the cost, hold the correction. A polite retreat in a high-trust setting makes the misconception *more* persuasive, not less.
+
+Fluent capitulation is worse than blunt capitulation: it makes the wrong thing more convincing. The trap set in `evals/sycophancy/` exists to measure this per mode — see `tools/primer_eval.py`.
+
 ## 2. The LLM Fallacy
 
 **Looks like:** Fluent prose flowing past the learner; they nod along; nothing is being constructed in their head. The session feels productive but is hollow.
