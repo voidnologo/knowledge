@@ -22,9 +22,4 @@ jobs:
       - name: primer_state tests
         run: python3 tools/test_primer_state.py
       - name: primer_view tests
-        run: |
-          if [ -f tools/test_primer_view.py ]; then
-            python3 tools/test_primer_view.py
-          else
-            echo "tools/test_primer_view.py not present yet — skipping"
-          fi
+        run: python3 tools/test_primer_view.py

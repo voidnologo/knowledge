@@ -110,6 +110,16 @@ For each prompt, grade the learner's recall and let the scheduler reschedule it:
 
 Look for in-progress state at `$DATA_DIR/lessons/<domain>/<YYYY-MM-DD>-<slug>.STATE.md` — a sidecar next to where the finished artifact will land (`primer/lesson-template.md`). If one exists, ask if it should be resumed. Otherwise surface the most recent unfinished lesson. On completion, the `.STATE.md` sidecar is removed and the `<YYYY-MM-DD>-<slug>.md` artifact remains.
 
+## `/primer view [lesson]` — Open a lesson's visual page
+
+Render and open the local view page for a lesson: `python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py render <artifact> --open`. Default to the most recent artifact in `$DATA_DIR/lessons/` when no lesson is named; accept a slug or a path.
+
+The page is one self-contained HTML file beside the artifact — full-size figures, the faded reveals, and any explorable. It makes no external requests and is never published. It's a derived build product: if it's missing or stale, regenerate rather than editing it.
+
+If the named lesson has no `<!--primer-figure ... -->` blocks, say so and offer to author figures for it — read `primer/diagramming.md`, add the specs to the artifact, then render. This is the path by which lessons written before the visual layer gain figures.
+
+`render` validates before reporting success and exits non-zero with the specific problem. **Fix the spec and re-run; never hand the learner a page that failed validation** — the checks exist because a broken figure renders blank and an ungated reveal hands over the answer the learner was supposed to predict.
+
 ## `/primer index` — Render the topic index
 
 Read `$DATA_DIR/learner/topic-index.md` and render as a tree with status flags: `[unexplored] [in-progress] [covered] [mastered]`. Link to lesson files where applicable.

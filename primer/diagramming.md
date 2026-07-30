@@ -68,7 +68,11 @@ So: blank the element that carries the invariant, ask the learner to fill it, th
 - Ask for a *specific* prediction: "what message has to happen here for the commit to be safe?" beats "what goes here?".
 - The `reveal` text is the answer *plus why* — one or two sentences. It is what the learner checks their prediction against, so it has to be falsifiable, not a restatement.
 
-The view page enforces this structurally: the reveal is hidden until the learner acts, and `primer_view.py validate` fails the page if the answer is visible before the commit affordance. You cannot accidentally hand it over.
+**The `invariant` is gated too, automatically.** For a blanked figure the invariant usually *is* the answer ("a leader that cannot reach a majority cannot advance the commit index" answers "what's missing here?"), so the generator moves it inside the gate alongside the reveal. Use the optional `predict` field for the line that shows *above* the figure — that's where the question goes. An unblanked figure shows its invariant normally.
+
+The view page enforces the rest structurally: the reveal is hidden until the learner acts, and `primer_view.py validate` fails the page if the answer is reachable before the commit affordance. You cannot accidentally hand it over. **The blanked ASCII rendering honours the same blanks**, so the terminal can't spoil the page — and a `blank` id that matches nothing is a hard error in *both* channels, because a silent no-op there would hand over the answer.
+
+One residual limit worth knowing: the reveal is in the page's DOM, so a browser's find-in-page expands closed `<details>`. This is inherent to a static local page. It's not a defence against a learner who wants the answer — it's a defence against *receiving* it without choosing to.
 
 For a learner whose profile shows low productive-struggle tolerance, still emit the blank — but say the answer immediately after they engage, rather than waiting them out. Same as the `just show me` rule in `lesson-protocol.md`.
 
@@ -94,13 +98,18 @@ Common fields, every type:
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Slug, unique within the lesson. Used for the page anchor. |
+| `id` | yes | Unique within the lesson. `^[A-Za-z][A-Za-z0-9_-]{0,63}$` — it becomes a DOM id. |
 | `type` | yes | One of `sequence` `state` `quorum` `layers` `curve` `timeline`. |
 | `caption` | yes | One line, above the figure. Validator fails without it. |
-| `invariant` | yes | The single claim the figure makes visible. Forces rule 1 on yourself. |
-| `blank` | no | Element ids to blank in the faded variant. Omit only with reason. |
-| `reveal` | if `blank` | The answer plus why. Hidden until the learner commits. |
+| `invariant` | yes | The single claim the figure makes visible. Forces rule 1 on yourself. Gated when the figure is blanked. |
+| `blank` | no | Element ids to blank in the faded variant. Omit only with reason. An id matching nothing is an error. |
+| `reveal` | if `blank` | The answer plus why. Hidden until the learner commits. Rejected if nothing is blanked. |
+| `predict` | no | The question shown above a blanked figure, in place of the gated invariant. |
 | `spec` | yes | Type-specific payload, below. |
+
+**Give every blankable element an `id`.** Messages, notes, transitions, illegal transitions, and spans are blankable *only* if they carry one, and the whole point is to blank the element carrying the invariant. Add ids as you author, not after.
+
+**Labels have a budget: 34 characters.** Templates own geometry, so they also own the consequence — a longer label would be clipped by the viewBox and silently lost. The generator rejects it instead. If a label needs more room, it's usually two figures.
 
 ### `sequence`
 
@@ -112,7 +121,7 @@ Common fields, every type:
   "messages": [{"id": "m1", "from": "L", "to": "F1", "label": "AppendEntries"},
                {"id": "m2", "from": "F1", "to": "L", "label": "ack", "dashed": true},
                {"id": "m3", "from": "L", "to": "F2", "label": "AppendEntries", "lost": true}],
-  "notes": [{"after": "m3", "over": "F2", "label": "election timeout fires"}]
+  "notes": [{"id": "n-timeout", "after": "m3", "over": "F2", "label": "timeout fires"}]
 }
 ```
 
@@ -125,13 +134,13 @@ Common fields, every type:
   "states": [{"id": "f", "label": "Follower", "initial": true},
              {"id": "c", "label": "Candidate"},
              {"id": "l", "label": "Leader"}],
-  "transitions": [{"from": "f", "to": "c", "label": "election timeout"},
-                  {"from": "c", "to": "l", "label": "majority vote"}],
-  "illegal": [{"from": "f", "to": "l", "label": "never — no election"}]
+  "transitions": [{"id": "t-timeout", "from": "f", "to": "c", "label": "election timeout"},
+                  {"id": "t-elected", "from": "c", "to": "l", "label": "majority vote"}],
+  "illegal": [{"id": "t-skip", "from": "f", "to": "l", "label": "never — no election"}]
 }
 ```
 
-`illegal` transitions render struck-through. They are usually the invariant: what the design *forbids* is more instructive than what it permits.
+`illegal` transitions render struck-through. They are usually the invariant — what the design *forbids* is more instructive than what it permits — so they are usually what you blank. Self-transitions (`from` == `to`) draw as a loop above the box.
 
 ### `quorum`
 
@@ -170,7 +179,7 @@ Top-to-bottom in array order. `boundary_after` draws the line below that index �
 }
 ```
 
-Provide 5–9 points; the template smooths. Annotate the knee — that's where the lesson is. If you're blanking, blank the region past the knee and ask the learner to predict the shape.
+Provide 5–9 points; they render as a polyline (no smoothing), so put points where the curve actually bends. At most 2 series — a third is rejected, not dropped. Annotate the knee — that's where the lesson is. If you're blanking, blank the region past the knee and ask the learner to predict the shape.
 
 ### `timeline`
 
@@ -213,8 +222,11 @@ So an explorable earns its place on one test: **is there a parameter whose varia
 Rules the generator enforces:
 
 - Every `formulas` key must be a declared output id; every declared output must have a formula. No orphans in either direction.
-- Formulas are restricted arithmetic over input ids: `+ - * / ( )`, numbers, and `min max abs sqrt exp log pow`. Anything else fails validation. No arbitrary JS reaches the page.
-- `predict` is required. An explorable without a prediction beat is a toy.
+- **Every declared input must be read by some formula.** A slider that moves and changes nothing is precisely the failure the contract exists to prevent.
+- Formulas are **parsed as arithmetic**, not merely filtered for allowed characters: numbers, declared input ids, `+ - * / ( ) ,` and `min max abs sqrt exp log pow` with correct arity. A malformed expression is rejected rather than emitted, so no arbitrary JS reaches the page.
+- **Input ids may not contain hyphens** — `a-b` is subtraction. Use `queue_depth`, not `queue-depth`. Output ids may contain hyphens.
+- Slider bounds must be numbers and `max` must exceed `min`; `decimals` is 0–8.
+- `predict` is required. An explorable without a prediction beat is a toy. The `invariant` is gated behind the same commit affordance as a blanked figure's reveal.
 - Two inputs maximum. Three sliders is a parameter-fitting exercise, not a lesson.
 
 ## Rendering and validating

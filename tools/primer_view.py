@@ -88,9 +88,14 @@ def extract_blocks(markdown: str) -> list[Block]:
 
 
 def esc(text: Any) -> str:
-    """Escape for XML text and attribute values."""
+    """Escape for XML text and attribute values.
+
+    Single quotes are escaped too, so that inert prose in a caption (a lesson *about*
+    HTML will contain `src='x'`) cannot look like a live attribute to the
+    external-reference scan.
+    """
     return (str(text).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;"))
+            .replace(">", "&gt;").replace('"', "&quot;").replace("'", "&#39;"))
 
 
 def svg_open(width: float, height: float, label: str) -> str:
@@ -126,9 +131,21 @@ def path(d: str, cls: str = "", marker: bool = True) -> str:
     return f'<path class="pv-l {cls}" d="{d}"{tip} fill="none"/>'
 
 
-ARROW_DEFS = ('<defs><marker id="pv-head" viewBox="0 0 10 10" refX="9" refY="5" '
-              'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
-              '<path class="pv-head" d="M 0 0 L 10 5 L 0 10 z"/></marker></defs>')
+# The arrowhead marker is defined once per page (below) and referenced by every figure;
+# repeating the <defs> per <svg> would put duplicate ids in the document.
+ARROW_DEFS = ""
+ARROW_DEFS_PAGE = ('<svg width="0" height="0" aria-hidden="true" '
+                   'xmlns="http://www.w3.org/2000/svg"><defs>'
+                   '<marker id="pv-head" viewBox="0 0 10 10" refX="9" refY="5" '
+                   'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+                   '<path class="pv-head" d="M 0 0 L 10 5 L 0 10 z"/></marker>'
+                   '</defs></svg>')
+
+# Defence in depth for "the page makes no external requests": a regex over generated
+# markup can be outrun, a browser-enforced policy cannot. `data:` images are allowed
+# because the design permits inlined assets; everything else is denied outright.
+CSP = ("default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; "
+       "img-src data:; form-action 'none'; base-uri 'none'")
 
 
 def require(spec: dict[str, Any], key: str, kind: str, fig: str) -> Any:
@@ -138,48 +155,128 @@ def require(spec: dict[str, Any], key: str, kind: str, fig: str) -> Any:
     return value
 
 
+# Ids reach HTML attributes, SVG anchors, and (for explorables) generated JavaScript
+# string literals. Constraining the character set at spec load is what makes those
+# interpolations safe by construction rather than by escaping discipline downstream.
+ID_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,63}$")
+# Formula-referencable names additionally exclude '-', so `a-b` tokenizes as subtraction
+# rather than as one identifier.
+NAME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_]{0,63}$")
+
+
+def check_id(value: Any, what: str, fig: str, pattern: re.Pattern[str] = ID_RE) -> str:
+    hint = "letters, digits, '_'" + ("" if pattern is NAME_RE else ", '-'")
+    if not isinstance(value, str) or not pattern.match(value):
+        raise SpecError(f"'{fig}': {what} must start with a letter and use only {hint} "
+                        f"(max 64 chars); got {value!r}")
+    return value
+
+
+def num(spec: dict[str, Any], key: str, default: Any, what: str, fig: str) -> float:
+    """Read a numeric spec field. Specs are model-authored, so the type is not a given."""
+    raw = spec.get(key, default)
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        raise SpecError(f"'{fig}': {what} field '{key}' must be a number; "
+                        f"got {raw!r}") from None
+
+
+def obj_list(spec: dict[str, Any], key: str, kind: str, fig: str) -> list[dict[str, Any]]:
+    """Read a required list-of-objects spec field, with the type checked up front."""
+    return _typed_list(require(spec, key, kind, fig), key, kind, fig)
+
+
+def opt_obj_list(spec: dict[str, Any], key: str, kind: str,
+                 fig: str) -> list[dict[str, Any]]:
+    """Same, for an optional field. A wrong type is reported rather than filtered away —
+    silently dropping malformed entries loses figure content without telling anyone."""
+    if key not in spec:
+        return []
+    return _typed_list(spec[key], key, kind, fig)
+
+
+def _typed_list(value: Any, key: str, kind: str, fig: str) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        raise SpecError(f"{kind} '{fig}': '{key}' must be a list of objects; "
+                        f"got {type(value).__name__}")
+    bad = next((i for i in value if not isinstance(i, dict)), None)
+    if bad is not None:
+        raise SpecError(f"{kind} '{fig}': every entry in '{key}' must be an object with "
+                        f"its own fields; found {bad!r}")
+    return value
+
+
+def req_key(item: dict[str, Any], key: str, kind: str, fig: str) -> Any:
+    if key not in item:
+        raise SpecError(f"{kind} '{fig}': an entry is missing required key '{key}': {item}")
+    return item[key]
+
+
 # ---------------------------------------------------------------------------
 # Figure templates. Each returns (svg, blankable_ids).
 # ---------------------------------------------------------------------------
 
 QMARK = "?"
 
+# Templates own geometry, which means they also own the label budget: these dimensions are
+# fixed, so a label past the budget would be clipped by the viewBox and silently lost.
+MAX_LABEL = 34
+LANE_W, LANE_TOP_H, MSG_PITCH = 170.0, 40.0, 46.0
+
+
+def _plain_label(value: Any, what: str, fig: str) -> str:
+    label = str(value)
+    if len(label) > MAX_LABEL:
+        raise SpecError(f"'{fig}': {what} label is {len(label)} chars, over the "
+                        f"{MAX_LABEL}-char budget for this form — it would be clipped by "
+                        f"the viewBox and silently lost. Shorten it, or split the figure.")
+    return label
+
+
+def _label_text(item: dict[str, Any], blanks: set[str], what: str, fig: str) -> str:
+    """A blankable element's visible label: `?` when blanked, budget-checked otherwise."""
+    if item.get("id") in blanks:
+        return QMARK
+    return _plain_label(item.get("label", ""), what, fig)
+
 
 def render_sequence(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
-    parts = require(spec, "participants", "sequence", fig)
-    msgs = require(spec, "messages", "sequence", fig)
-    notes = spec.get("notes", [])
-    lane, top_h = 170.0, 40.0
-    width = max(len(parts) * lane, 320.0)
-    first_y = top_h + 52
-    height = first_y + len(msgs) * 46 + 30
+    parts = obj_list(spec, "participants", "sequence", fig)
+    msgs = obj_list(spec, "messages", "sequence", fig)
+    notes = opt_obj_list(spec, "notes", "sequence", fig)
+    width = max(len(parts) * LANE_W, 320.0)
+    first_y = LANE_TOP_H + 52
+    height = first_y + len(msgs) * MSG_PITCH + 30
 
-    def cx(pid: str) -> float:
+    def cx(pid: Any) -> float:
         for i, p in enumerate(parts):
             if p.get("id") == pid:
-                return lane / 2 + i * lane
-        raise SpecError(f"sequence '{fig}': message references unknown participant '{pid}'")
+                return LANE_W / 2 + i * LANE_W
+        raise SpecError(f"sequence '{fig}': references unknown participant '{pid}'")
 
     out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
     for i, p in enumerate(parts):
-        x = lane / 2 + i * lane
-        out.append(box(x - lane / 2 + 12, 8, lane - 24, top_h - 8))
-        out.append(text(x, 8 + (top_h - 8) / 2 + 5, p.get("label", p.get("id", "?"))))
-        out.append(line(x, top_h + 6, x, height - 14, "pv-lifeline"))
+        x = LANE_W / 2 + i * LANE_W
+        out.append(box(x - LANE_W / 2 + 12, 8, LANE_W - 24, LANE_TOP_H - 8))
+        out.append(text(x, 8 + (LANE_TOP_H - 8) / 2 + 5,
+                        _plain_label(p.get("label", p.get("id", "?")), "participant", fig)))
+        out.append(line(x, LANE_TOP_H + 6, x, height - 14, "pv-lifeline"))
 
     for j, m in enumerate(msgs):
-        y = first_y + j * 46
+        y = first_y + j * MSG_PITCH
         blanked = m.get("id") in blanks
-        label = QMARK if blanked else m.get("label", "")
         cls = " ".join(c for c in ("pv-dash" if m.get("dashed") else "",
                                   "pv-blank" if blanked else "") if c)
-        x1, x2 = cx(m["from"]), cx(m["to"])
-        out.append(_sequence_message(x1, x2, y, label, cls, bool(m.get("lost"))))
+        x1 = cx(req_key(m, "from", "sequence", fig))
+        x2 = cx(req_key(m, "to", "sequence", fig))
+        out.append(_sequence_message(x1, x2, y, _label_text(m, blanks, "message", fig),
+                                    cls, bool(m.get("lost"))))
 
     for n in notes:
-        y = first_y + _note_offset(msgs, n) * 46 - 30
-        blanked = n.get("id") in blanks
-        out.append(_sequence_note(cx(n["over"]), y, QMARK if blanked else n.get("label", "")))
+        y = first_y + _note_offset(msgs, n) * MSG_PITCH - 30
+        out.append(_sequence_note(cx(req_key(n, "over", "sequence", fig)), y,
+                                  _label_text(n, blanks, "note", fig)))
 
     out.append("</svg>")
     return "\n".join(out)
@@ -212,9 +309,9 @@ def _sequence_note(x: float, y: float, label: str) -> str:
 
 
 def render_state(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
-    states = require(spec, "states", "state", fig)
-    trans = spec.get("transitions", [])
-    illegal = spec.get("illegal", [])
+    states = obj_list(spec, "states", "state", fig)
+    trans = opt_obj_list(spec, "transitions", "state", fig)
+    illegal = opt_obj_list(spec, "illegal", "state", fig)
     sw, gap, bh = 150.0, 40.0, 48.0
     width = max(len(states) * (sw + gap) + gap, 340.0)
     mid = 140.0
@@ -234,18 +331,16 @@ def render_state(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
         x = gap + i * (sw + gap)
         cls = "pv-initial" if s.get("initial") else ""
         out.append(box(x, mid - bh / 2, sw, bh, cls))
-        out.append(text(x + sw / 2, mid + 5, s.get("label", s.get("id", "?"))))
+        out.append(text(x + sw / 2, mid + 5,
+                        _plain_label(s.get("label", s.get("id", "?")), "state", fig)))
 
-    for t in trans:
-        blanked = t.get("id") in blanks
-        label = QMARK if blanked else t.get("label", "")
-        out.append(_state_edge(cx(t["from"]), cx(t["to"]), mid, bh, sw, label,
-                               "pv-blank" if blanked else "", below=False))
-    for t in illegal:
-        blanked = t.get("id") in blanks
-        label = QMARK if blanked else t.get("label", "")
-        out.append(_state_edge(cx(t["from"]), cx(t["to"]), mid, bh, sw, label,
-                               "pv-illegal" + (" pv-blank" if blanked else ""), below=True))
+    for t, below in [(t, False) for t in trans] + [(t, True) for t in illegal]:
+        cls = "pv-illegal " if below else ""
+        cls += "pv-blank" if t.get("id") in blanks else ""
+        out.append(_state_edge(cx(req_key(t, "from", "state", fig)),
+                               cx(req_key(t, "to", "state", fig)), mid, bh, sw,
+                               _label_text(t, blanks, "transition", fig),
+                               cls.strip(), below=below))
     out.append("</svg>")
     return "\n".join(out)
 
@@ -253,6 +348,14 @@ def render_state(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
 def _state_edge(x1: float, x2: float, mid: float, bh: float, sw: float, label: str,
                 cls: str, below: bool) -> str:
     """Straight arrow between neighbours; an arc otherwise so edges don't cross boxes."""
+    if x1 == x2:
+        # A self-transition (retry, heartbeat, re-election) is common in the lifecycles
+        # this form is for. Drawn as a loop above the box; a straight arrow would run
+        # through the state it belongs to.
+        top = mid - bh / 2
+        d = (f"M {x1 - 26:g} {top:g} C {x1 - 34:g} {top - 46:g} "
+             f"{x1 + 34:g} {top - 46:g} {x1 + 26:g} {top:g}")
+        return path(d, cls) + text(x1, top - 40, label, "pv-sm")
     adjacent = abs(x2 - x1) < sw * 1.6
     if adjacent and not below:
         edge = (sw / 2) * (1 if x2 > x1 else -1)
@@ -269,8 +372,11 @@ def _state_edge(x1: float, x2: float, mid: float, bh: float, sw: float, label: s
 
 
 def render_quorum(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
-    nodes = require(spec, "nodes", "quorum", fig)
+    nodes = obj_list(spec, "nodes", "quorum", fig)
     groups = require(spec, "partition", "quorum", fig)
+    if not isinstance(groups, list) or not all(isinstance(g, list) and g for g in groups):
+        raise SpecError(f"quorum '{fig}': 'partition' must be a list of non-empty lists "
+                        f"of node ids")
     by_id = {n.get("id"): n for n in nodes}
     for g in groups:
         unknown = [n for n in g if n not in by_id]
@@ -292,7 +398,7 @@ def render_quorum(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
                    f'width="{widths[gi]:g}" height="118" rx="10"/>')
         out.append(text(x + widths[gi] / 2, 166,
                         QMARK if blanked else _progress_label(wins, progress), "pv-sm"))
-        out.extend(_quorum_nodes(group, by_id, x + pad / 2, step))
+        out.extend(_quorum_nodes(group, by_id, x + pad / 2, step, fig))
         x += widths[gi]
         if gi < len(groups) - 1:
             out.append(line(x + split / 2, 12, x + split / 2, height - 46, "pv-partition"))
@@ -317,7 +423,7 @@ def _progress_label(wins: bool, progress: str) -> str:
 
 
 def _quorum_nodes(group: list[str], by_id: dict[Any, Any], x0: float,
-                  step: float) -> list[str]:
+                  step: float, fig: str) -> list[str]:
     out: list[str] = []
     for i, nid in enumerate(group):
         node = by_id[nid]
@@ -326,14 +432,14 @@ def _quorum_nodes(group: list[str], by_id: dict[Any, Any], x0: float,
         out.append(f'<circle class="pv-node" cx="{cx:g}" cy="76" r="27"/>')
         if leader:
             out.append(f'<circle class="pv-node pv-leader-ring" cx="{cx:g}" cy="76" r="33"/>')
-        out.append(text(cx, 81, node.get("label", nid)))
+        out.append(text(cx, 81, _plain_label(node.get("label", nid), "node", fig)))
         if leader:
             out.append(text(cx, 128, "leader", "pv-sm"))
     return out
 
 
 def render_layers(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
-    layers = require(spec, "layers", "layers", fig)
+    layers = obj_list(spec, "layers", "layers", fig)
     bw, bh, gap, left = 430.0, 54.0, 14.0, 46.0
     width = left + bw + 20
     height = 20 + len(layers) * (bh + gap) + 24
@@ -344,14 +450,21 @@ def render_layers(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     for i, layer in enumerate(layers):
         y = 20 + i * (bh + gap)
         out.append(box(left, y, bw, bh))
-        out.append(text(left + 16, y + bh / 2 + 5, layer.get("label", "?"), "", "start"))
+        out.append(text(left + 16, y + bh / 2 + 5,
+                        _plain_label(layer.get("label", "?"), "layer", fig), "", "start"))
         if layer.get("detail"):
-            out.append(text(left + bw - 16, y + bh / 2 + 5, layer["detail"], "pv-sm", "end"))
+            out.append(text(left + bw - 16, y + bh / 2 + 5,
+                            _plain_label(layer["detail"], "layer detail", fig),
+                            "pv-sm", "end"))
 
     after = spec.get("boundary_after")
     if after is not None:
+        idx = int(num(spec, "boundary_after", 0, "layers", fig))
+        if not 0 <= idx < len(layers):
+            raise SpecError(f"layers '{fig}': boundary_after must index a layer "
+                            f"(0–{len(layers) - 1}); got {after!r}")
         blanked = "boundary" in blanks
-        y = 20 + (int(after) + 1) * (bh + gap) - gap / 2
+        y = 20 + (idx + 1) * (bh + gap) - gap / 2
         out.append(line(left - 16, y, left + bw + 8, y, "pv-partition"))
         label = QMARK if blanked else spec.get("boundary_label", "boundary")
         out.append(text(left + bw + 4, y - 7, label, "pv-sm", "end"))
@@ -360,22 +473,24 @@ def render_layers(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
 
 
 def render_curve(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
-    xa = require(spec, "x", "curve", fig)
-    ya = require(spec, "y", "curve", fig)
-    series = require(spec, "series", "curve", fig)
+    xa = _axis(spec, "x", fig)
+    ya = _axis(spec, "y", fig)
+    series = obj_list(spec, "series", "curve", fig)
+    if len(series) > 2:
+        raise SpecError(f"curve '{fig}': at most 2 series — a third would be silently "
+                        f"dropped. Split the figure, or drop a series.")
     ml, mr, mt, mb = 62.0, 24.0, 18.0, 46.0
     pw, ph = 380.0, 226.0
     width, height = ml + pw + mr, mt + ph + mb
-    blanked = "tail" in blanks
-    cut = _curve_cut(spec, xa) if blanked else None
+    cut = _curve_cut(spec, xa, series, fig) if "tail" in blanks else None
 
     def px(v: float) -> float:
-        span = float(xa["max"]) - float(xa["min"]) or 1.0
-        return ml + (float(v) - float(xa["min"])) / span * pw
+        span = xa["max"] - xa["min"] or 1.0
+        return ml + (float(v) - xa["min"]) / span * pw
 
     def py(v: float) -> float:
-        span = float(ya["max"]) - float(ya["min"]) or 1.0
-        return mt + ph - (float(v) - float(ya["min"])) / span * ph
+        span = ya["max"] - ya["min"] or 1.0
+        return mt + ph - (float(v) - ya["min"]) / span * ph
 
     out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
     out.append(line(ml, mt, ml, mt + ph, "pv-axis"))
@@ -383,57 +498,89 @@ def render_curve(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     out.append(text(ml + pw / 2, height - 12, xa.get("label", "x"), "pv-sm"))
     out.append(f'<text class="pv-t pv-sm" x="14" y="{mt + ph / 2:g}" text-anchor="middle" '
                f'transform="rotate(-90 14 {mt + ph / 2:g})">{esc(ya.get("label", "y"))}</text>')
-    # float() rather than trusting the spec's literal type — specs are authored, not typed.
-    out.append(text(ml, mt + ph + 18, f'{float(xa["min"]):g}', "pv-sm"))
-    out.append(text(ml + pw, mt + ph + 18, f'{float(xa["max"]):g}', "pv-sm"))
-    out.append(text(ml - 8, mt + ph + 4, f'{float(ya["min"]):g}', "pv-sm", "end"))
-    out.append(text(ml - 8, mt + 10, f'{float(ya["max"]):g}', "pv-sm", "end"))
+    out.append(text(ml, mt + ph + 18, f'{xa["min"]:g}', "pv-sm"))
+    out.append(text(ml + pw, mt + ph + 18, f'{xa["max"]:g}', "pv-sm"))
+    out.append(text(ml - 8, mt + ph + 4, f'{ya["min"]:g}', "pv-sm", "end"))
+    out.append(text(ml - 8, mt + 10, f'{ya["max"]:g}', "pv-sm", "end"))
 
-    for si, s in enumerate(series[:2]):
-        pts = [(float(a), float(b)) for a, b in s.get("points", [])]
-        if len(pts) < 2:
-            raise SpecError(f"curve '{fig}': series '{s.get('label')}' needs 2+ points")
+    for si, s in enumerate(series):
+        pts = _points(s, fig)
         kept = [p for p in pts if cut is None or p[0] <= cut]
         # Style by dash pattern, never by colour alone.
         cls = "pv-series" + (" pv-dash" if si else "")
         d = "M " + " L ".join(f"{px(a):g} {py(b):g}" for a, b in kept)
         out.append(path(d, cls, marker=False))
-        out.append(text(px(kept[-1][0]) - 6, py(kept[-1][1]) - 10, s.get("label", ""),
-                        "pv-sm", "end"))
+        out.append(text(px(kept[-1][0]) - 6, py(kept[-1][1]) - 10,
+                        _plain_label(s.get("label", ""), "series", fig), "pv-sm", "end"))
 
     if cut is not None:
         out.append(f'<rect class="pv-blank-region" x="{px(cut):g}" y="{mt:g}" '
                    f'width="{ml + pw - px(cut):g}" height="{ph:g}"/>')
         out.append(text((px(cut) + ml + pw) / 2, mt + ph / 2, QMARK, "pv-qmark"))
-    for a in spec.get("annotate", []):
-        ax = px(a["x"])
+    for a in opt_obj_list(spec, "annotate", "curve", fig):
+        ax = px(num(a, "x", 0, "annotate", fig))
         out.append(line(ax, mt, ax, mt + ph, "pv-partition"))
-        out.append(text(ax, mt - 4, a.get("label", ""), "pv-sm"))
+        out.append(text(ax, mt - 4, _plain_label(a.get("label", ""), "annotation", fig),
+                        "pv-sm"))
     out.append("</svg>")
     return "\n".join(out)
 
 
-def _curve_cut(spec: dict[str, Any], xa: dict[str, Any]) -> float:
-    """Blank from the annotated knee if there is one, else the last 30% of the x range."""
-    notes = spec.get("annotate", [])
-    if notes:
-        return float(notes[0]["x"])
-    lo, hi = float(xa["min"]), float(xa["max"])
-    return lo + (hi - lo) * 0.7
+def _axis(spec: dict[str, Any], key: str, fig: str) -> dict[str, Any]:
+    axis = require(spec, key, "curve", fig)
+    if not isinstance(axis, dict):
+        raise SpecError(f"curve '{fig}': axis '{key}' must be an object with label/min/max")
+    lo = num(axis, "min", None, f"axis '{key}'", fig)
+    hi = num(axis, "max", None, f"axis '{key}'", fig)
+    if hi <= lo:
+        raise SpecError(f"curve '{fig}': axis '{key}' has max <= min")
+    return {"label": _plain_label(axis.get("label", key), f"axis '{key}'", fig),
+            "min": lo, "max": hi}
+
+
+def _points(series: dict[str, Any], fig: str) -> list[tuple[float, float]]:
+    raw = series.get("points", [])
+    if not isinstance(raw, list) or len(raw) < 2:
+        raise SpecError(f"curve '{fig}': series '{series.get('label')}' needs 2+ points")
+    try:
+        pts = [(float(p[0]), float(p[1])) for p in raw]
+    except (TypeError, ValueError, IndexError, KeyError):
+        raise SpecError(f"curve '{fig}': series '{series.get('label')}' points must be "
+                        f"[[x, y], …] with numeric x and y") from None
+    return sorted(pts)
+
+
+def _curve_cut(spec: dict[str, Any], xa: dict[str, Any],
+               series: list[dict[str, Any]], fig: str) -> float:
+    """Blank from the annotated knee if there is one, else the last 30% of the x range.
+
+    Bounded against the data: a knee outside the plotted points would leave a series with
+    fewer than two points, which renders an empty path that still parses as valid XML —
+    a figure that silently shows nothing.
+    """
+    notes = opt_obj_list(spec, "annotate", "curve", fig)
+    cut = (num(notes[0], "x", 0, "annotate", fig) if notes
+           else xa["min"] + (xa["max"] - xa["min"]) * 0.7)
+    for s in series:
+        if len([p for p in _points(s, fig) if p[0] <= cut]) < 2:
+            raise SpecError(f"curve '{fig}': blanking the tail at x={cut:g} leaves series "
+                            f"'{s.get('label')}' with fewer than 2 visible points — move "
+                            f"the annotation inside the plotted range, or add points")
+    return cut
 
 
 def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
-    actors = require(spec, "actors", "timeline", fig)
-    spans = require(spec, "spans", "timeline", fig)
+    actors = obj_list(spec, "actors", "timeline", fig)
+    spans = obj_list(spec, "spans", "timeline", fig)
     ml, mr, mt = 130.0, 24.0, 16.0
     row, pw = 46.0, 380.0
     height = mt + len(actors) * row + 48
     width = ml + pw + mr
-    lo = min(float(s["start"]) for s in spans)
-    hi = max(float(s["end"]) for s in spans)
+    lo = min(num(s, "start", None, "span", fig) for s in spans)
+    hi = max(num(s, "end", None, "span", fig) for s in spans)
     span = (hi - lo) or 1.0
 
-    def rowy(aid: str) -> float:
+    def rowy(aid: Any) -> float:
         for i, a in enumerate(actors):
             if a.get("id") == aid:
                 return mt + i * row
@@ -442,20 +589,19 @@ def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
     for i, a in enumerate(actors):
         y = mt + i * row
-        out.append(text(ml - 12, y + row / 2 + 5, a.get("label", a.get("id", "?")),
+        out.append(text(ml - 12, y + row / 2 + 5,
+                        _plain_label(a.get("label", a.get("id", "?")), "actor", fig),
                         "pv-sm", "end"))
         out.append(line(ml, y + row / 2, ml + pw, y + row / 2, "pv-lifeline"))
 
     for s in spans:
-        blanked = s.get("id") in blanks
-        y = rowy(s["actor"]) + row / 2 - 12
-        x1 = ml + (float(s["start"]) - lo) / span * pw
-        x2 = ml + (float(s["end"]) - lo) / span * pw
-        cls = "pv-blank" if blanked else ""
-        out.append(f'<rect class="pv-span {cls}" x="{x1:g}" y="{y:g}" '
-                   f'width="{max(x2 - x1, 3):g}" height="24" rx="4"/>')
-        out.append(text((x1 + x2) / 2, y + 17, QMARK if blanked else s.get("label", ""),
-                        "pv-sm"))
+        y = rowy(req_key(s, "actor", "timeline", fig)) + row / 2 - 12
+        x1 = ml + (num(s, "start", None, "span", fig) - lo) / span * pw
+        x2 = ml + (num(s, "end", None, "span", fig) - lo) / span * pw
+        cls = "pv-blank" if s.get("id") in blanks else ""
+        out.append(f'<rect class="pv-span {cls}" x="{min(x1, x2):g}" y="{y:g}" '
+                   f'width="{max(abs(x2 - x1), 3):g}" height="24" rx="4"/>')
+        out.append(text((x1 + x2) / 2, y + 17, _label_text(s, blanks, "span", fig), "pv-sm"))
 
     axis_y = height - 30
     out.append(line(ml, axis_y, ml + pw, axis_y, "pv-axis"))
@@ -478,18 +624,34 @@ RENDERERS: dict[str, Callable[[dict[str, Any], set[str], str], str]] = {
 # ---------------------------------------------------------------------------
 
 
+def _ids_of(spec: dict[str, Any], *keys: str) -> set[str]:
+    """Ids of the listed element collections, tolerant of a malformed spec.
+
+    This runs before the renderers' type checks (blanks are validated first so a mistyped
+    blank id is reported ahead of any geometry work), so it cannot assume list-of-dict.
+    """
+    found: set[str] = set()
+    for key in keys:
+        value = spec.get(key, [])
+        if not isinstance(value, list):
+            continue
+        found |= {i["id"] for i in value
+                  if isinstance(i, dict) and isinstance(i.get("id"), str)}
+    return found
+
+
 def blankable_ids(block: dict[str, Any]) -> set[str]:
     """Which ids a figure's `blank` list may name. Takes the whole block, not the payload."""
     kind = block.get("type")
     spec = block.get("spec", {})
+    if not isinstance(spec, dict):
+        return set()
     if kind == "sequence":
-        return {m["id"] for m in spec.get("messages", []) if "id" in m} | {
-            n["id"] for n in spec.get("notes", []) if "id" in n}
+        return _ids_of(spec, "messages", "notes")
     if kind == "state":
-        return {t["id"] for t in spec.get("transitions", []) + spec.get("illegal", [])
-                if "id" in t}
+        return _ids_of(spec, "transitions", "illegal")
     if kind == "timeline":
-        return {s["id"] for s in spec.get("spans", []) if "id" in s}
+        return _ids_of(spec, "spans")
     if kind == "quorum":
         return {"progress"}
     if kind == "layers":
@@ -503,64 +665,155 @@ def blankable_ids(block: dict[str, Any]) -> set[str]:
 # Explorables: formula compilation
 # ---------------------------------------------------------------------------
 
-TOKEN_RE = re.compile(r"\s*(?:(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_][A-Za-z0-9_-]*)"
+TOKEN_RE = re.compile(r"\s*(?:(?P<num>\d+(?:\.\d+)?)|(?P<name>[A-Za-z_][A-Za-z0-9_]*)"
                       r"|(?P<op>\*\*|[-+*/(),]))")
+
+# Arity per whitelisted function, so a malformed call is rejected rather than emitted.
+FUNC_ARITY = {"min": 2, "max": 2, "pow": 2, "abs": 1, "sqrt": 1, "exp": 1, "log": 1}
 
 
 def compile_formula(expr: str, inputs: set[str], out_id: str) -> str:
     """Compile a restricted arithmetic expression over input ids into JS.
 
-    Only numbers, declared input ids, the four operators, parentheses, commas, and the
-    whitelisted functions survive. Anything else raises — no arbitrary expression from a
-    spec becomes executable JavaScript.
+    Checking the token *alphabet* is not enough: a sequence of individually-legal tokens
+    can still form JavaScript that isn't arithmetic. `1/*2` opens a JS comment and
+    swallows the statements after it; a lone `(` is a SyntaxError that kills the whole
+    script block; `min(/1/,2)` smuggles in a regex literal. So this parses a grammar and
+    emits from the parse, which makes the output arithmetic-over-declared-inputs by
+    construction rather than by hoping the token filter was sufficient.
     """
-    pieces: list[str] = []
+    tokens = _tokenize(expr, out_id)
+    if not tokens:
+        raise SpecError(f"explorable output '{out_id}': empty formula")
+    parser = _Parser(tokens, inputs, out_id)
+    js = parser.expression()
+    parser.expect_end()
+    return js
+
+
+def _tokenize(expr: str, out_id: str) -> list[tuple[str, str]]:
+    tokens: list[tuple[str, str]] = []
     pos = 0
     while pos < len(expr):
         m = TOKEN_RE.match(expr, pos)
-        if not m:
+        if not m or m.end() == pos:
             raise SpecError(f"explorable output '{out_id}': cannot parse formula at "
                             f"{expr[pos:pos + 12]!r}")
         pos = m.end()
-        pieces.append(_compile_token(m, inputs, out_id, expr))
-    if not pieces:
-        raise SpecError(f"explorable output '{out_id}': empty formula")
-    return "".join(pieces)
-
-
-def _compile_token(m: re.Match[str], inputs: set[str], out_id: str, expr: str) -> str:
-    if m.group("num"):
-        return m.group("num")
-    if m.group("op"):
-        if m.group("op") == "**":
+        kind = next(k for k in ("num", "name", "op") if m.group(k) is not None)
+        if m.group(kind) == "**":
             raise SpecError(f"explorable output '{out_id}': use pow(a,b), not '**'")
-        return m.group("op")
-    name = m.group("name")
-    if name in inputs:
-        return f'v["{name}"]'
-    if name in ALLOWED_FUNCS:
-        return ALLOWED_FUNCS[name]
-    raise SpecError(f"explorable output '{out_id}': unknown name '{name}' in formula "
-                    f"{expr!r} — not a declared input and not one of "
-                    f"{sorted(ALLOWED_FUNCS)}")
+        tokens.append((kind, m.group(kind)))
+    return tokens
+
+
+class _Parser:
+    """Recursive descent: expr := term (('+'|'-') term)*, term := factor (('*'|'/') …)*."""
+
+    def __init__(self, tokens: list[tuple[str, str]], inputs: set[str], out_id: str):
+        self.tokens = tokens
+        self.inputs = inputs
+        self.out_id = out_id
+        self.pos = 0
+
+    def fail(self, problem: str) -> None:
+        seen = self.tokens[self.pos][1] if self.pos < len(self.tokens) else "end of formula"
+        raise SpecError(f"explorable output '{self.out_id}': {problem} (at {seen!r})")
+
+    def peek(self) -> tuple[str, str] | None:
+        return self.tokens[self.pos] if self.pos < len(self.tokens) else None
+
+    def take_op(self, *ops: str) -> str | None:
+        token = self.peek()
+        if token and token[0] == "op" and token[1] in ops:
+            self.pos += 1
+            return token[1]
+        return None
+
+    def expect_end(self) -> None:
+        if self.peek() is not None:
+            self.fail("trailing tokens after a complete expression")
+
+    def expression(self) -> str:
+        js = self.term()
+        while (op := self.take_op("+", "-")):
+            js += op + self.term()
+        return js
+
+    def term(self) -> str:
+        js = self.factor()
+        while (op := self.take_op("*", "/")):
+            js += op + self.factor()
+        return js
+
+    def factor(self) -> str:
+        op = self.take_op("+", "-")
+        return op + self.factor() if op else self.primary()
+
+    def primary(self) -> str:
+        token = self.peek()
+        if token is None or (token[0] == "op" and token[1] != "("):
+            self.fail("expected a number, an input, or '('")
+            raise AssertionError("unreachable")  # fail() always raises
+        self.pos += 1
+        if token[0] == "num":
+            return token[1]
+        if token[0] == "name":
+            return self.name(token[1])
+        js = self.expression()
+        if not self.take_op(")"):
+            self.fail("unbalanced parenthesis")
+        return f"({js})"
+
+    def name(self, name: str) -> str:
+        if name in self.inputs:
+            return f'v["{name}"]'
+        if name not in ALLOWED_FUNCS:
+            self.fail(f"unknown name '{name}' — not a declared input and not one of "
+                      f"{sorted(ALLOWED_FUNCS)}")
+        return self.call(name)
+
+    def call(self, name: str) -> str:
+        if not self.take_op("("):
+            self.fail(f"'{name}' is a function and needs parentheses")
+        args = [self.expression()]
+        while self.take_op(","):
+            args.append(self.expression())
+        if not self.take_op(")"):
+            self.fail(f"unbalanced parenthesis in {name}(...)")
+        if len(args) != FUNC_ARITY[name]:
+            self.fail(f"{name}() takes {FUNC_ARITY[name]} argument(s), got {len(args)}")
+        return f"{ALLOWED_FUNCS[name]}({','.join(args)})"
+
+
+MAX_DECIMALS = 8  # Number.prototype.toFixed accepts 0–100; 8 is past any useful readout.
+INPUT_REF_RE = re.compile(r'v\["([^"]+)"\]')
 
 
 def compile_explorable(spec: dict[str, Any]) -> dict[str, Any]:
-    fig = str(spec.get("id", "<no-id>"))
+    fig = check_id(spec.get("id"), "explorable id", str(spec.get("id", "<no-id>")))
     for key in ("caption", "invariant", "predict", "contract", "formulas"):
         require(spec, key, "explorable", fig)
     contract = spec["contract"]
-    ins = require(contract, "inputs", "explorable", fig)
-    outs = require(contract, "outputs", "explorable", fig)
+    ins = obj_list(contract, "inputs", "explorable", fig)
+    outs = obj_list(contract, "outputs", "explorable", fig)
     if len(ins) > 2:
         raise SpecError(f"explorable '{fig}': at most 2 inputs (three sliders is a "
                         f"parameter-fitting exercise, not a lesson)")
-    in_ids = {i["id"] for i in ins}
-    out_ids = [o["id"] for o in outs]
-    formulas = spec["formulas"]
+    # Input ids land in generated JS as object keys, and are referenced by formulas, so
+    # they get the stricter no-hyphen name rule.
+    in_ids = {check_id(req_key(i, "id", "explorable", fig), "input id", fig, NAME_RE)
+              for i in ins}
+    out_ids = [check_id(req_key(o, "id", "explorable", fig), "output id", fig) for o in outs]
+    formulas = require(spec, "formulas", "explorable", fig)
+    if not isinstance(formulas, dict):
+        raise SpecError(f"explorable '{fig}': 'formulas' must be an object mapping "
+                        f"output id to expression")
     _check_contract_closed(fig, out_ids, formulas)
-    compiled = {oid: compile_formula(formulas[oid], in_ids, oid) for oid in out_ids}
-    return {"inputs": ins, "outputs": outs, "js": compiled}
+    compiled = {oid: compile_formula(str(formulas[oid]), in_ids, oid) for oid in out_ids}
+    _check_inputs_used(fig, in_ids, compiled)
+    return {"inputs": [_norm_input(i, fig) for i in ins],
+            "outputs": [_norm_output(o, fig) for o in outs], "js": compiled}
 
 
 def _check_contract_closed(fig: str, out_ids: list[str], formulas: dict[str, str]) -> None:
@@ -571,6 +824,37 @@ def _check_contract_closed(fig: str, out_ids: list[str], formulas: dict[str, str
         raise SpecError(f"explorable '{fig}': outputs without a formula: {missing}")
     if extra:
         raise SpecError(f"explorable '{fig}': formulas for undeclared outputs: {extra}")
+
+
+def _check_inputs_used(fig: str, in_ids: set[str], compiled: dict[str, str]) -> None:
+    """A slider no formula reads is the 'output doesn't track input' failure, inverted."""
+    read = {name for js in compiled.values() for name in INPUT_REF_RE.findall(js)}
+    unused = sorted(in_ids - read)
+    if unused:
+        raise SpecError(f"explorable '{fig}': declared inputs that no formula reads: "
+                        f"{unused} — a control that changes nothing is the failure the "
+                        f"contract exists to prevent")
+
+
+def _norm_input(spec: dict[str, Any], fig: str) -> dict[str, Any]:
+    """Coerce the slider bounds to numbers. Unchecked, a string flows into an HTML
+    attribute and can inject arbitrary attributes, including event handlers."""
+    lo = num(spec, "min", 0, "input", fig)
+    hi = num(spec, "max", 1, "input", fig)
+    if hi <= lo:
+        raise SpecError(f"explorable '{fig}': input '{spec['id']}' has max <= min")
+    return {"id": spec["id"], "label": str(req_key(spec, "label", "explorable", fig)),
+            "min": lo, "max": hi, "step": num(spec, "step", 0.01, "input", fig),
+            "value": min(max(num(spec, "value", lo, "input", fig), lo), hi)}
+
+
+def _norm_output(spec: dict[str, Any], fig: str) -> dict[str, Any]:
+    decimals = int(num(spec, "decimals", 2, "output", fig))
+    if not 0 <= decimals <= MAX_DECIMALS:
+        raise SpecError(f"explorable '{fig}': output '{spec['id']}' decimals must be "
+                        f"0–{MAX_DECIMALS}; got {decimals}")
+    return {"id": spec["id"], "label": str(req_key(spec, "label", "explorable", fig)),
+            "decimals": decimals}
 
 
 # ---------------------------------------------------------------------------
@@ -586,12 +870,18 @@ def ascii_figure(block: dict[str, Any]) -> str:
     answer the learner is supposed to predict.
     """
     kind = block.get("type")
+    fig = str(block.get("id", "<no-id>"))
+    blanks = set(block.get("blank", []))
+    # The same check `figure_html` runs. Without it a mistyped blank id is a silent no-op
+    # here, and this is the channel the learner sees *during* the prediction beat — the
+    # page is rendered at Recap, after. A silent miss hands over the answer.
+    _check_blanks(fig, blanks, block)
     renderer = {"sequence": _ascii_sequence, "layers": _ascii_layers,
                 "quorum": _ascii_quorum, "timeline": _ascii_timeline}.get(str(kind))
     if renderer is None:
         return (f"[{kind} figures render on the view page only — "
                 f"caption: {block.get('caption', '')}]")
-    return renderer(block.get("spec", {}), set(block.get("blank", [])))
+    return renderer(block.get("spec", {}), blanks)
 
 
 def _label(item: dict[str, Any], blanks: set[str]) -> str:
@@ -618,10 +908,14 @@ def _ascii_layers(spec: dict[str, Any], blanks: set[str]) -> str:
     layers = spec.get("layers", [])
     for i, layer in enumerate(layers):
         rows.append(f"    {layer.get('label', '?')}")
+        on_boundary = after is not None and i == int(after)
         if i == len(layers) - 1:
+            # A boundary below the last layer still has to be drawn — otherwise a figure
+            # whose blanked element *is* that boundary shows the learner nothing.
+            if on_boundary:
+                rows.append(f"  ╌╌╌ {boundary} ╌╌╌")
             break
-        rows.append(f"  ╌╌╌ {boundary} ╌╌╌" if after is not None and i == int(after)
-                    else "      │")
+        rows.append(f"  ╌╌╌ {boundary} ╌╌╌" if on_boundary else "      │")
     return "\n".join(rows)
 
 
@@ -723,6 +1017,8 @@ font-weight:600}
 .pv-leader-ring{fill:none;stroke-dasharray:4 3}
 .pv-group{fill:none;stroke:var(--line);stroke-width:1.25}
 .pv-shade{fill:var(--shade)}
+.pv-shade-off{fill:none;stroke-dasharray:5 5}
+.pv-arrow{stroke-linecap:round}
 .pv-span{fill:var(--shade);stroke:var(--fg);stroke-width:1.25}
 .pv-blank{stroke:var(--acc);stroke-width:2.5;stroke-dasharray:5 4}
 .pv-blank-region{fill:var(--shade);stroke:var(--acc);stroke-dasharray:5 4}
@@ -761,7 +1057,7 @@ def explorable_js(fig: str, compiled: dict[str, Any]) -> str:
 
 
 def figure_html(spec: dict[str, Any]) -> str:
-    fig = str(spec.get("id", "<no-id>"))
+    fig = check_id(spec.get("id"), "figure id", str(spec.get("id", "<no-id>")))
     kind = str(require(spec, "type", "figure", fig))
     if kind not in RENDERERS:
         raise SpecError(f"figure '{fig}': unknown type '{kind}' "
@@ -769,15 +1065,25 @@ def figure_html(spec: dict[str, Any]) -> str:
     caption = require(spec, "caption", "figure", fig)
     invariant = require(spec, "invariant", "figure", fig)
     payload = require(spec, "spec", "figure", fig)
+    if not isinstance(payload, dict):
+        raise SpecError(f"figure '{fig}': 'spec' must be an object")
     blanks = set(spec.get("blank", []))
     _check_blanks(fig, blanks, spec)
+    if spec.get("reveal") and not blanks:
+        raise SpecError(f"figure '{fig}': has a 'reveal' but nothing is blanked — either "
+                        f"blank the element carrying the invariant or drop the reveal")
     # Reveal is required before any geometry work, so a spec missing it reports that
     # rather than whatever the renderer trips over first.
-    reveal = _reveal_html(require(spec, "reveal", "figure", fig)) if blanks else ""
+    gated = _gate_html(require(spec, "reveal", "figure", fig), invariant) if blanks else ""
+    # The invariant is the figure's one claim, so for a blanked figure it usually *is* the
+    # answer. Ungated, it pre-announces what the learner was asked to predict — so it moves
+    # inside the gate, and the optional `predict` line takes its place above the figure.
+    prompt = (f'<p class="predict">{esc(spec["predict"])}</p>\n'
+              if blanks and spec.get("predict") else "")
+    visible_inv = "" if blanks else f'<p class="inv">{esc(invariant)}</p>\n'
     svg = RENDERERS[kind](payload, blanks, fig)
-    return (f'<figure id="fig-{esc(fig)}">\n<figcaption>{esc(caption)}</figcaption>\n'
-            f'<p class="inv">{esc(invariant)}</p>\n<div class="fig-body">{svg}</div>\n'
-            f'{reveal}</figure>\n')
+    return (f'<figure id="fig-{fig}">\n<figcaption>{esc(caption)}</figcaption>\n'
+            f'{visible_inv}<div class="fig-body">{svg}</div>\n{prompt}{gated}</figure>\n')
 
 
 def _check_blanks(fig: str, blanks: set[str], spec: dict[str, Any]) -> None:
@@ -789,9 +1095,10 @@ def _check_blanks(fig: str, blanks: set[str], spec: dict[str, Any]) -> None:
                         f" A silent no-op here would hand the learner the answer.")
 
 
-def _reveal_html(reveal: str) -> str:
+def _gate_html(reveal: str, invariant: str) -> str:
     return ('<details><summary>I have committed to a prediction — reveal</summary>\n'
-            f'<p class="reveal">{esc(reveal)}</p>\n</details>\n')
+            f'<p class="reveal">{esc(reveal)}</p>\n'
+            f'<p class="inv">{esc(invariant)}</p>\n</details>\n')
 
 
 def explorable_html(spec: dict[str, Any]) -> tuple[str, str]:
@@ -802,22 +1109,25 @@ def explorable_html(spec: dict[str, Any]) -> tuple[str, str]:
         f'<div class="out"><b id="out-{esc(fig)}-{esc(o["id"])}">—</b>'
         f'<span>{esc(o["label"])}</span></div>' for o in compiled["outputs"])
     body = (f'<div class="ctl">{ctl}</div>\n<div class="outs">{outs}</div>\n')
-    html = (f'<figure id="fig-{esc(fig)}">\n'
+    # Invariant inside the gate for the same reason as a blanked figure: it states the
+    # shape the learner is being asked to predict.
+    html = (f'<figure id="fig-{fig}">\n'
             f'<figcaption>{esc(spec["caption"])}</figcaption>\n'
-            f'<p class="inv">{esc(spec["invariant"])}</p>\n'
             f'<p class="predict">{esc(spec["predict"])}</p>\n'
             f'<details><summary>I have made my prediction — show the model</summary>\n'
-            f'{body}</details>\n</figure>\n')
+            f'{body}<p class="inv">{esc(spec["invariant"])}</p>\n</details>\n</figure>\n')
     return html, explorable_js(fig, compiled)
 
 
 def _input_html(fig: str, spec: dict[str, Any]) -> str:
+    """Slider markup. Bounds are floats by the time they get here (`_norm_input`), so the
+    `:g` formatting cannot emit anything that escapes the attribute."""
     iid = spec["id"]
-    return (f'<div><label for="in-{esc(fig)}-{esc(iid)}">{esc(spec["label"])} '
-            f'(<span id="echo-{esc(fig)}-{esc(iid)}"></span>)</label>'
-            f'<input type="range" id="in-{esc(fig)}-{esc(iid)}" '
-            f'min="{spec.get("min", 0)}" max="{spec.get("max", 1)}" '
-            f'step="{spec.get("step", 0.01)}" value="{spec.get("value", spec.get("min", 0))}">'
+    return (f'<div><label for="in-{fig}-{iid}">{esc(spec["label"])} '
+            f'(<span id="echo-{fig}-{iid}"></span>)</label>'
+            f'<input type="range" id="in-{fig}-{iid}" '
+            f'min="{spec["min"]:g}" max="{spec["max"]:g}" '
+            f'step="{spec["step"]:g}" value="{spec["value"]:g}">'
             f'</div>')
 
 
@@ -838,7 +1148,9 @@ def build_page(markdown: str, artifact: Path) -> Page:
     scripts: list[str] = []
     manifest: dict[str, Any] = {"artifact": artifact.name, "figures": []}
 
+    seen: set[str] = set()
     for block in blocks:
+        _check_unique(block, seen)
         if block.kind == "figure":
             figures.append(figure_html(block.spec))
             manifest["figures"].append(_figure_manifest(block.spec))
@@ -848,18 +1160,38 @@ def build_page(markdown: str, artifact: Path) -> Page:
         scripts.append(js)
         manifest["figures"].append(_explorable_manifest(block.spec))
 
-    body = "".join(figures)
     doc = (f'<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n'
+           f'<meta http-equiv="Content-Security-Policy" content="{CSP}">\n'
            f'<meta name="viewport" content="width=device-width,initial-scale=1">\n'
            f'<title>{esc(title)} — primer</title>\n<style>{PAGE_CSS}</style>\n</head>\n'
-           f'<body>\n<button class="theme" id="theme">theme</button>\n<div class="wrap">\n'
+           f'<body>\n<button class="theme" id="theme">theme</button>\n'
+           f'{ARROW_DEFS_PAGE}\n<div class="wrap">\n'
            f'<header>\n<h1>{esc(title)}</h1>\n'
            f'<p class="meta">Figures for <code>{esc(artifact.name)}</code>. '
            f'Generated locally; nothing on this page leaves your machine.</p>\n</header>\n'
-           f'{body}</div>\n'
-           f'<!--pv-manifest {json.dumps(manifest, separators=(",", ":"))}-->\n'
+           f'{"".join(figures)}</div>\n'
+           f'<!--pv-manifest {_manifest_comment(manifest)}-->\n'
            f'<script>{THEME_JS}{"".join(scripts)}</script>\n</body>\n</html>\n')
     return Page(html=doc, manifest=manifest)
+
+
+def _check_unique(block: Block, seen: set[str]) -> None:
+    """Duplicate ids give two elements the same anchor; getElementById silently wins the
+    first, so the second figure's wiring would be dead but validated."""
+    if block.id in seen:
+        raise SpecError(f"duplicate figure id '{block.id}' — ids must be unique per lesson")
+    seen.add(block.id)
+
+
+def _manifest_comment(manifest: dict[str, Any]) -> str:
+    """Serialize the manifest so it cannot terminate its own HTML comment.
+
+    `json.dumps` leaves `<` and `-->` intact, so a caption containing `-->` (Mermaid edge
+    syntax — a plausible thing to write *about*) would close the comment early and expose
+    everything after it to the HTML parser. Both replacements stay valid JSON.
+    """
+    payload = json.dumps(manifest, separators=(",", ":"))
+    return payload.replace("<", "\\u003c").replace("--", "\\u002d\\u002d")
 
 
 def _figure_manifest(spec: dict[str, Any]) -> dict[str, Any]:
@@ -885,17 +1217,32 @@ def _explorable_manifest(spec: dict[str, Any]) -> dict[str, Any]:
 MANIFEST_RE = re.compile(r"<!--pv-manifest (\{.*?\})-->", re.DOTALL)
 SVG_RE = re.compile(r"<svg\b.*?</svg>", re.DOTALL)
 DETAILS_RE = re.compile(r"<details(?P<attrs>[^>]*)>(?P<body>.*?)</details>", re.DOTALL)
-# `file://` and in-page anchors are local; xmlns values are namespace identifiers,
-# not fetches, so they are stripped before this scan.
-EXTERNAL_RE = re.compile(r"""(?:src|href)\s*=\s*["'](?!#|file://)[^"']*["']"""
-                         r"""|@import|url\(\s*['"]?https?:|<link\b""", re.IGNORECASE)
+
+TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+ATTR_RE = re.compile(r"""([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""")
+STYLE_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.DOTALL)
+SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script>", re.DOTALL)
+# Attributes that can cause a fetch. Scanning by attribute name rather than by a
+# `src=`-shaped pattern is what catches `srcset`, `poster`, `data`, and friends.
+URL_ATTRS = {"src", "srcset", "href", "xlink:href", "data", "poster", "action",
+             "formaction", "background", "cite", "codebase", "longdesc", "profile",
+             "manifest", "ping", "usemap"}
+# Schemes that stay on the machine. Anything else in a URL attribute is a network hop.
+LOCAL_URL_RE = re.compile(r"^\s*(?:#|data:|file:)", re.IGNORECASE)
+# Network APIs. A CSP blocks these at runtime, but failing the build is a clearer signal.
+JS_NETWORK_RE = re.compile(r"\bfetch\s*\(|XMLHttpRequest|\bimport\s*\(|sendBeacon"
+                           r"|new\s+Worker|EventSource|WebSocket|\beval\s*\(",
+                           re.IGNORECASE)
+CSS_NETWORK_RE = re.compile(r"@import|url\(\s*['\"]?(?!data:)[a-zA-Z0-9+.-]*:?//",
+                            re.IGNORECASE)
 
 
 def validate_page(html: str) -> list[str]:
     """Return the list of checks that passed; raise ValidationError on the first failure."""
     manifest = _read_manifest(html)
     checks = [
-        ("figure well-formedness", lambda: _check_wellformed(html)),
+        ("comment integrity", lambda: _check_comment_integrity(html)),
+        ("figure well-formedness", lambda: _check_wellformed(html, manifest)),
         ("no external requests", lambda: _check_no_external(html)),
         ("caption coverage", lambda: _check_captions(html, manifest)),
         ("contract satisfaction", lambda: _check_contracts(html, manifest)),
@@ -916,10 +1263,25 @@ def _read_manifest(html: str) -> dict[str, Any]:
     return json.loads(m.group(1))
 
 
-def _check_wellformed(html: str) -> None:
+def _check_comment_integrity(html: str) -> None:
+    """The page must contain exactly one comment terminator: the manifest's own.
+
+    A spec string containing `-->` would otherwise close the manifest comment early and
+    hand the rest of it to the HTML parser. `_manifest_comment` escapes it at generation;
+    this is the check that the escaping actually held.
+    """
+    count = html.count("-->")
+    if count != 1:
+        raise ValidationError(f"comment integrity: found {count} comment terminators, "
+                              f"expected exactly 1 (the manifest) — a spec string has "
+                              f"escaped into markup")
+
+
+def _check_wellformed(html: str, manifest: dict[str, Any]) -> None:
     """Every generated SVG must parse as XML — a broken figure renders blank otherwise."""
     blocks = SVG_RE.findall(html)
-    if not blocks and '"kind":"explorable"' not in html:
+    has_figure = any(f.get("kind") != "explorable" for f in manifest.get("figures", []))
+    if not blocks and has_figure:
         raise ValidationError("figure well-formedness: no <svg> blocks found")
     for i, block in enumerate(blocks):
         try:
@@ -930,12 +1292,44 @@ def _check_wellformed(html: str) -> None:
 
 
 def _check_no_external(html: str) -> None:
-    stripped = re.sub(r'xmlns(?::\w+)?\s*=\s*["\'][^"\']*["\']', "", html)
-    hits = EXTERNAL_RE.findall(stripped)
-    if hits:
-        raise ValidationError(f"no external requests: page references external resources "
-                              f"{sorted(set(hits))[:4]} — the page must be fully "
-                              f"self-contained and must not phone home")
+    """The page must be fully self-contained.
+
+    Scanned per *tag attribute* rather than with a `src=`-shaped regex over the whole
+    document. That matters in both directions: the old shape missed `srcset`, `poster`,
+    `data`, and `http-equiv=refresh`, and it false-positived on inert prose (a lesson
+    *about* HTML legitimately contains `src='x'` in a caption).
+    """
+    _check_tags(html)
+    for css in STYLE_RE.findall(html):
+        if CSS_NETWORK_RE.search(css):
+            raise ValidationError("no external requests: a <style> block imports or "
+                                  "fetches a remote resource")
+    for js in SCRIPT_RE.findall(html):
+        hit = JS_NETWORK_RE.search(js)
+        if hit:
+            raise ValidationError(f"no external requests: a <script> block uses "
+                                  f"'{hit.group(0).strip()}' — the page must not reach "
+                                  f"the network or evaluate dynamic code")
+
+
+def _check_tags(html: str) -> None:
+    for tag in TAG_RE.findall(html):
+        for name, raw in ATTR_RE.findall(tag):
+            _check_attr(name.lower(), raw.strip("\"'"), tag)
+
+
+def _check_attr(name: str, value: str, tag: str) -> None:
+    if name.startswith("on"):
+        raise ValidationError(f"no external requests: inline event handler '{name}' in "
+                              f"{tag[:70]!r} — all behaviour must come from the generated "
+                              f"script block")
+    if name == "http-equiv" and value != "Content-Security-Policy":
+        raise ValidationError(f"no external requests: unexpected http-equiv '{value}' "
+                              f"(a meta refresh can navigate off the page)")
+    if name in URL_ATTRS and not LOCAL_URL_RE.match(value):
+        raise ValidationError(f"no external requests: attribute '{name}={value[:40]}' "
+                              f"points outside the page — only '#', 'data:', and 'file:' "
+                              f"are local")
 
 
 def _check_captions(html: str, manifest: dict[str, Any]) -> None:
@@ -1036,7 +1430,12 @@ SCHEMA_HELP = """Figure spec blocks live in the lesson artifact as HTML comments
   -->
 
 Common fields: id, type, caption, invariant (all required); blank + reveal (blank
-requires reveal); spec (type-specific).
+requires reveal, and reveal requires blank); optional predict (shown above a blanked
+figure, since the invariant is gated with the reveal); spec (type-specific).
+
+Ids match ^[A-Za-z][A-Za-z0-9_-]{0,63}$. Labels are capped at 34 chars (past that they
+would be clipped by the viewBox). Only elements carrying an "id" are blankable, and a
+blank id that matches nothing is an error in both the page and the ASCII channel.
 
   sequence  spec.participants[{id,label}], spec.messages[{id,from,to,label,dashed?,lost?}],
             spec.notes[{id?,after,over,label}]                 blankable: message/note ids
@@ -1062,8 +1461,11 @@ Explorables declare a contract; the wiring is generated, never hand-written:
    "formulas":{"wait":"rho / (1 - rho)"}}
   -->
 
-Formulas allow numbers, declared input ids, + - * / ( ) , and min max abs sqrt exp
-log pow. Max 2 inputs. Every output needs exactly one formula and vice versa.
+Formulas are PARSED as arithmetic, not merely filtered: numbers, declared input ids,
++ - * / ( ) , and min max abs sqrt exp log pow with correct arity (min/max/pow take 2).
+Max 2 inputs, each of which some formula must read. Every output needs exactly one
+formula and vice versa. Input ids may not contain "-" (a-b is subtraction); output ids
+may. Slider bounds must be numeric with max > min; decimals is 0-8.
 """
 
 
@@ -1076,9 +1478,12 @@ def cmd_templates(_: argparse.Namespace) -> int:
 def cmd_render(args: argparse.Namespace) -> int:
     artifact = Path(args.artifact)
     page = build_page(artifact.read_text(encoding="utf-8"), artifact)
+    # Validate *before* writing. The output path is deterministic and the learner is told
+    # to click it, so writing first would leave an invalid page — or destroy a valid
+    # earlier one — at exactly the path the engine promises is safe to open.
+    passed = validate_page(page.html)
     out = artifact.with_name(artifact.stem + ".view.html")
     out.write_text(page.html, encoding="utf-8")
-    passed = validate_page(page.html)
     print(f"ok: {out} ({len(page.manifest['figures'])} figures)")
     print("    checks passed: " + ", ".join(passed))
     print(f"    open: {out.resolve().as_uri()}")
@@ -1102,9 +1507,11 @@ def cmd_ascii(args: argparse.Namespace) -> int:
         print(f"error: no figure with id '{args.id}' in {artifact.name}", file=sys.stderr)
         return 2
     for block in wanted:
-        if block.kind != "figure":
-            continue
         print(f"{block.spec.get('caption', '')}\n")
+        if block.kind != "figure":
+            print(f"[explorable '{block.id}' has no terminal rendering — it needs the "
+                  f"view page. Prediction prompt: {block.spec.get('predict', '')}]\n")
+            continue
         print(ascii_figure(block.spec))
         print()
     return 0
@@ -1144,6 +1551,14 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except (OSError, json.JSONDecodeError) as exc:
         print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        # Specs are model-authored, so a shape this code didn't anticipate is a spec
+        # problem, not a crash to show the learner. Report it as one and exit non-zero
+        # rather than printing a traceback.
+        print(f"error: internal failure while rendering ({type(exc).__name__}: {exc}). "
+              f"This is a malformed spec the validator did not name — check the figure "
+              f"spec against `primer_view.py templates`.", file=sys.stderr)
         return 1
 
 

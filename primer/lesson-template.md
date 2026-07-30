@@ -71,6 +71,21 @@ Worked example → faded example → free problem. Diagrams inline (Mermaid for 
 
 For multi-pattern lessons (e.g., "outbox vs CDC vs change-streams"), each pattern gets its own subsection.
 
+**Figure specs live here, as HTML comment blocks.** They are invisible in rendered markdown, greppable, hand-editable, and stdlib-parseable — so the artifact stays the single source of truth and the view page is always regenerable from it. One block per figure, next to the prose it supports:
+
+```
+<!--primer-figure
+{"id":"raft-minority-partition","type":"sequence",
+ "caption":"Leader isolated in a minority partition.",
+ "invariant":"A leader that cannot reach a majority cannot advance the commit index.",
+ "blank":["m3"],
+ "reveal":"The majority-side ack. Safety holds by refusing to commit, not by detecting the partition.",
+ "spec":{ }}
+-->
+```
+
+Every figure carries a `caption` and exactly one `invariant`; a blanked figure carries the `reveal`. Form selection and the per-type spec payload are in `primer/diagramming.md`; `primer_view.py templates` prints the schema. The rendered page is `<YYYY-MM-DD>-<slug>.view.html` beside the artifact — a **derived build product**, gitignored in the instance and rebuilt on demand. (Contrast `.STATE.md`, which is checkpoint state and must sync.)
+
 ### `## Tradeoffs`
 
 A table. When does pattern X beat Y? Cost axes: operational complexity, latency, consistency, blast radius on failure, team cognitive load. Honest, not advocacy.

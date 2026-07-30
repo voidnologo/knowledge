@@ -41,13 +41,20 @@ else
   # (see SKILL.md $DATA_DIR resolution). Mirrors the public core's layout.
   cp "$TEMPLATE_DIR"/*.md "$DATA_DIR/learner/"
 
-  # A private instance has nothing to hide from itself; just keep editor/OS noise out.
+  # A private instance has nothing to hide from itself; keep editor/OS noise out, plus
+  # derived build products. Lesson view pages regenerate from the artifact
+  # (primer_view.py render), so syncing them would only produce merge noise. Note
+  # lessons/**/*.STATE.md is deliberately NOT ignored — it is checkpoint state and must
+  # cross machines (D-0021).
   cat > "$DATA_DIR/.gitignore" <<'GITIGNORE'
 .DS_Store
 *.swp
 *.swo
 .idea/
 .vscode/
+
+# Derived: regenerated from the lesson artifact by primer_view.py
+lessons/**/*.view.html
 GITIGNORE
 
   cat > "$DATA_DIR/README.md" <<'README'
@@ -70,6 +77,16 @@ README
   git -C "$DATA_DIR" add -A
   git -C "$DATA_DIR" commit -q -m "Initialize primer instance from template"
   echo "Initialized git repo in $DATA_DIR"
+fi
+
+# Derived-product rules have to reach instances that already exist, not just new ones —
+# an instance created before the visual layer would otherwise commit generated view
+# pages. Appended idempotently; never rewrites an existing gitignore.
+VIEW_IGNORE='lessons/**/*.view.html'
+if [[ -f "$DATA_DIR/.gitignore" ]] && ! grep -qF "$VIEW_IGNORE" "$DATA_DIR/.gitignore"; then
+  printf '\n# Derived: regenerated from the lesson artifact by primer_view.py\n%s\n' \
+    "$VIEW_IGNORE" >> "$DATA_DIR/.gitignore"
+  echo "Added '$VIEW_IGNORE' to $DATA_DIR/.gitignore (generated pages are not synced)"
 fi
 
 # Per-machine pointer. Don't clobber an existing one without telling the user.

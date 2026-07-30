@@ -88,6 +88,7 @@ conversation, never from reading the code.
 - `/primer recalibrate` — deep profile review (the minor one runs automatically every 5 lessons)
 - `/primer review` — interleaved spaced-retrieval warm-up from prior lessons
 - `/primer resume` — pick up an in-progress lesson
+- `/primer view [lesson]` — open a lesson's visual page (figures, faded reveals, explorables)
 - `/primer index` — show topic-index tree with status
 - `/primer profile` — show or update your profile
 - `/primer suggest <goal>` — propose a multi-lesson track for a stated goal
@@ -98,7 +99,7 @@ The full set and the engineering rationale live in [`docs/engineering/GOALS.md`]
 
 - **Personal, calibrated, evidence-backed.** Depth markers carry confidence + evidence; the system knows what it has *seen* you do vs. what it *assumed*. Intake discovers ability and goal; the feedback cycle keeps the profile true.
 - **Senior peer, not teacher.** Lessons read like a senior engineer talking to a colleague (register is calibrated per learner). No motivational fluff.
-- **Productive struggle over fluent answers.** Every lesson forces prediction or critique before the explanation lands.
+- **Productive struggle over fluent answers.** Every lesson forces prediction or critique before the explanation lands. Figures work the same way: you get the diagram with the causal step blanked, and the answer stays behind a gate until you've committed to a prediction.
 - **Currency is non-negotiable.** The canon (`primer/source-canon.md`) is a *vetted floor*, not a ceiling — every lesson searches for current sources beyond it; a stale-list is the guardrail.
 - **Private by architecture, never proprietary.** All personal data — profile *and* lessons — lives only in your private instance; the skill never auto-reads a work codebase. Publishing a lesson is a deliberate future derivation step, not a default.
 
