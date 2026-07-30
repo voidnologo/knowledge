@@ -48,6 +48,19 @@ See `proposals/0002-…md`. Decisions resolved:
 - [ ] Consider merging `proposal-0001-review-and-fixes` → `main` (rebase first; `origin/main` advanced).
 - [ ] Remaining habit-formation surface (proactive nudges, retention-trend payoff, meta-learning asides) — grow with real use.
 
+### Proposal 0003 — visual layer + capability refresh: **[proposed — awaiting scope decision]**
+
+See `proposals/0003-visual-layer-and-capability-refresh.md`; evidence in `research/2026-07-30-capability-and-evidence-refresh.md`. Maintainer-stated next tasks are **Wave A (presentation)** and **Wave E (research)**, with **M1 first** so the added instructions fit the context budget.
+
+- [ ] **M1** — progressive disclosure for the engine (stop static-loading all 8 engine files, ~15k tokens, on every invocation).
+- [ ] **Wave A** — V1 `diagramming.md` + `visuals.md` rewrite ("no images in v1" is superseded); V2 local `<slug>.view.html` (single file, zero external requests); V3 contracted explorables; V4 `tools/primer_view.py` generate+validate; V5 `/primer view` verb + Deepen-step hook; V6 figure template library.
+- [ ] **Wave E** — R1 `research-protocol.md`; R2 discovery pass in a subagent; R3 `tools/primer_sources.py` + `learner/source-ledger.md`; R4 per-domain research cache + claim-level provenance.
+- [ ] **Wave B** (next block) — H1 examiner subagent at Recap (breaks the tutor-grades-itself loop); H2 sycophancy trap set; H3 count the "just show me" escape hatch.
+- [ ] **M2** revisit D-0020c → FSRS-6 with pretrained defaults; **M3** ground prompt generation in graded exemplars (+ fix bad-prompt-vs-forgotten conflation).
+- [ ] **Wave D** (defer until real lesson data) — S1 simulated-learner regression suite; S2 opt-in SessionStart hook; S3 teach-it-back mode.
+- [ ] **X1** — hedge the "every existing learning skill is session-scoped" claim in the README/research (several Claude Code learning skills now ship persistence; three vendors ship Socratic study modes).
+- [ ] **X2** — re-verify snippet-only figures before citing (Mayer / drawing / PhET meta-analyses, LearnLM RCT); June artifacts' freshness horizon is ~2026-09.
+
 ## Done (this session)
 
 - [x] Wave 1: intake, feedback cycle, currency reframe, profile restructure.
