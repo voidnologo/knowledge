@@ -23,16 +23,24 @@ Lessons feel like a senior peer talking to a colleague (register is calibrated p
 </objective>
 
 <execution_context>
-The `primer/*` files below are the **engine** — they ship with the public core and are loaded statically.
+The `primer/*` files are the **engine** — they ship with the public core. Only the always-applicable one is loaded statically; the rest are read on demand so a lesson's context budget goes to the lesson, not to instructions the current verb doesn't use.
 
 @${CLAUDE_SKILL_DIR}/primer/system-prompt.md
-@${CLAUDE_SKILL_DIR}/primer/lesson-protocol.md
-@${CLAUDE_SKILL_DIR}/primer/intake-protocol.md
-@${CLAUDE_SKILL_DIR}/primer/feedback-protocol.md
-@${CLAUDE_SKILL_DIR}/primer/lesson-template.md
-@${CLAUDE_SKILL_DIR}/primer/source-canon.md
-@${CLAUDE_SKILL_DIR}/primer/anti-patterns.md
-@${CLAUDE_SKILL_DIR}/primer/visuals.md
+
+**Load these on demand — `Read` the file at the point named, before doing the work it governs.** These are not optional; they are deferred. Skipping one because the verb "seems clear" is the failure mode this table exists to prevent.
+
+| File | Read it when | Do not proceed without it |
+|---|---|---|
+| `primer/lesson-protocol.md` | starting any lesson (`<topic>`, `next` after selection, `resume`) | running the Elicit→Recap loop |
+| `primer/anti-patterns.md` | same time as `lesson-protocol.md` | the session-end self-check |
+| `primer/intake-protocol.md` | `init` | the cold-start interview |
+| `primer/feedback-protocol.md` | Recap state updates, `recalibrate`, `review` | moving any depth marker or confidence |
+| `primer/lesson-template.md` | writing the lesson artifact | the artifact's structure and prompt-quality bar |
+| `primer/source-canon.md` | the Deepen step's source-discovery pass | vetting or citing a source |
+| `primer/visuals.md` | a lesson that will show a figure | choosing a diagram form |
+| `primer/diagramming.md` | authoring a figure spec | composing the figure or its blanked variant |
+
+Read only what the verb needs. `index` and `profile` need none of them.
 
 Learner state is **instance data** — it lives in the learner's private data repo, not the core, and is read at runtime from the resolved data dir (see *Resolve the data dir* in `<process>`). It is **not** statically included here.
 </execution_context>
@@ -58,21 +66,21 @@ The skill takes one argument. Route on it:
 
 ## `/primer init` — First-time setup (intake interview)
 
-Run when no instance exists. Execute the intake interview in `primer/intake-protocol.md`: the 6-phase cold-start interview (frame → identity → goals & stakes → per-domain calibration with one live probe each → learning style → anti-preferences → synthesis). On completion, scaffold `$DATA_DIR` from `templates/learner/` and write the initial profile, seeded topic-index (with confidence + evidence), calibration-log, and first log entry. Close by proposing the first 2–3 lessons. If `~/.config/primer/config` doesn't exist yet, walk the learner through `tools/init-instance.sh` first.
+Run when no instance exists. **Read `primer/intake-protocol.md` first**, then execute the intake interview it specifies: the 6-phase cold-start interview (frame → identity → goals & stakes → per-domain calibration with one live probe each → learning style → anti-preferences → synthesis). On completion, scaffold `$DATA_DIR` from `templates/learner/` and write the initial profile, seeded topic-index (with confidence + evidence), calibration-log, and first log entry. Close by proposing the first 2–3 lessons. If `~/.config/primer/config` doesn't exist yet, walk the learner through `tools/init-instance.sh` first.
 
 ## `/primer recalibrate` — Correct the model
 
-Deep, user-invoked recalibration per `primer/feedback-protocol.md`: mine `calibration-log.md` for patterns, detect goal/depth drift, audit low-confidence markers, re-confirm stable traits, compact volatile churn, flag stale canon entries. Output a "what changed and why" diff; apply on confirmation. (The *minor* recalibrate runs automatically at lesson start when evidence-triggered — 4+ misses or 8+ lessons since the last one, defaults configurable — not invoked here.)
+**Read `primer/feedback-protocol.md` first.** Then run the deep, user-invoked recalibration it specifies: mine `calibration-log.md` for patterns, detect goal/depth drift, audit low-confidence markers, re-confirm stable traits, compact volatile churn, flag stale canon entries. Output a "what changed and why" diff; apply on confirmation. (The *minor* recalibrate runs automatically at lesson start when evidence-triggered — 4+ misses or 8+ lessons since the last one, defaults configurable — not invoked here.)
 
 ## `/primer <topic>` — Run a lesson
 
 1. **Calibrate.** Read `$DATA_DIR/learner/profile.md` (stable traits) and `$DATA_DIR/learner/topic-index.md` (depth markers with confidence + evidence, open ZPD edges). Note the depth marker and its confidence for the topic's domain — low-confidence markers are assumptions to probe, not facts to fade past. Note prior lessons in this domain and relevant entries in `$DATA_DIR/learner/open-questions.md`.
 2. **Minor recalibrate check (evidence-triggered, capped).** Ask the scheduler, don't count by hand: `python3 ${CLAUDE_SKILL_DIR}/tools/primer_state.py --data-dir "$DATA_DIR" recalibrate-check` (fires on 4+ misses or 8+ lessons since the last recalibrate; defaults configurable — see `primer/feedback-protocol.md`). If it fires, run the minor recalibrate first: apply decay with `… markers-decay` (drifts stale high-confidence markers to med + reprobe), scan `calibration-log.md` for repeated misses, flip warranted statuses, show a 3–5 line diff, then proceed. Log the run as `<date> | recalibrate-minor | …` so the next check counts from here.
 3. **Plan.** Propose a one-paragraph lesson plan: framing, key invariants, what you'll skip given their depth. Get a quick acknowledgment or course-correction.
-4. **Run the protocol.** Elicit → Probe → Diagnose → Deepen → Recap (`primer/lesson-protocol.md`). The Deepen step's source-discovery pass is mandatory. Use AskUserQuestion sparingly; default to free-form conversation.
+4. **Run the protocol.** Read `primer/lesson-protocol.md` and `primer/anti-patterns.md`, then run Elicit → Probe → Diagnose → Deepen → Recap. The Deepen step's source-discovery pass is mandatory (read `primer/source-canon.md` for it). Use AskUserQuestion sparingly; default to free-form conversation.
 5. **Self-check** against `primer/anti-patterns.md` before writing the artifact.
-6. **Write the artifact** to `$DATA_DIR/lessons/<domain-slug>/<YYYY-MM-DD>-<lesson-slug>.md` per `primer/lesson-template.md`. Include retrieval prompts. Promote any load-bearing newly-discovered source into the canon floor.
-7. **Update state** (`primer/feedback-protocol.md`):
+6. **Write the artifact** to `$DATA_DIR/lessons/<domain-slug>/<YYYY-MM-DD>-<lesson-slug>.md` per `primer/lesson-template.md` (read it). Include retrieval prompts. Promote any load-bearing newly-discovered source into the canon floor. If the lesson carried figures, write the view page (see `/primer view`).
+7. **Update state** (read `primer/feedback-protocol.md`):
    - Append retrieval prompts via the scheduler (one call per prompt; it sets the initial schedule — don't hand-write the scheduled lines): `python3 ${CLAUDE_SKILL_DIR}/tools/primer_state.py --data-dir "$DATA_DIR" review-add --domain <d> --question "<q>" --answer "<a>"`.
    - Append open threads to `$DATA_DIR/learner/open-questions.md`.
    - Update the domain's depth marker in `$DATA_DIR/learner/topic-index.md`: depth, `[confidence]`, evidence (this session). Mark the topic covered/in-progress; refresh ZPD edges and suggested next.
@@ -92,7 +100,7 @@ Pull due prompts with the scheduler — `python3 ${CLAUDE_SKILL_DIR}/tools/prime
 
 This is **optional to invoke** — some learners prefer to skim prior lesson logs. But cultivating the review habit is a project goal (`docs/engineering/GOALS.md` Goal 5), so the Primer **offers it proactively** ("you've got a few recalls due — want a 90-second warm-up?") and briefly says why retrieval beats re-reading, rather than waiting to be asked. The always-on anchor is the Elicit-step recall inside each lesson (`primer/lesson-protocol.md`); `/primer review` is the second, deliberate cold-retrieval source.
 
-For each prompt, grade the learner's recall and let the scheduler reschedule it: `… review-grade --index <i> --quality again|hard|good|easy`. Then wire the result back into the model (`primer/feedback-protocol.md`):
+For each prompt, grade the learner's recall and let the scheduler reschedule it: `… review-grade --index <i> --quality again|hard|good|easy`. Then wire the result back into the model (read `primer/feedback-protocol.md`):
 
 1. **On a miss** (`again`): append a `retention-miss` entry to `calibration-log.md` and **lower the relevant domain's depth-marker confidence** in `topic-index.md`. (The scheduler already requeues it at a short interval.)
 2. **On a clean answer to an old prompt:** confirm/raise confidence — durable retention, not session-fresh recall.

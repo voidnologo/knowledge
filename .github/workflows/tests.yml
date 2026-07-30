@@ -1,0 +1,30 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  # The engine's deterministic bookkeeping is stdlib-only Python (D-0018/D-0020), so
+  # there is nothing to install — the matrix exists to catch use of anything newer
+  # than the documented 3.11+ floor.
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ["3.11", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: primer_state tests
+        run: python3 tools/test_primer_state.py
+      - name: primer_view tests
+        run: |
+          if [ -f tools/test_primer_view.py ]; then
+            python3 tools/test_primer_view.py
+          else
+            echo "tools/test_primer_view.py not present yet — skipping"
+          fi

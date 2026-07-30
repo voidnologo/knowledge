@@ -1,42 +1,33 @@
-# Visuals — Mermaid + ASCII Conventions
+# Visuals — channels and conventions
 
-Lessons are text-native. Visuals are first-class but constrained: they must render in (a) a terminal session and (b) GitHub-rendered markdown. No images in v1.
+Lessons are text-native, but visuals are first-class. Read this to know *where* a visual goes and what the rules are. For *which* form to choose, how to compose it, and the spec format, read `primer/diagramming.md`.
 
-## Mermaid (artifact-side)
+## Three channels, one source
 
-Use Mermaid for:
+A figure is authored **once**, as a spec in the lesson artifact (`<!--primer-figure ... -->`, see `diagramming.md`). It renders to three places:
 
-- Sequence diagrams (request flows, consensus rounds, saga choreography).
-- State diagrams (replication state, leader-follower transitions).
-- Flowcharts (decision trees, branching pattern selection).
-- Entity-relationship sketches when domain modeling matters.
+| Channel | What it's for | How |
+|---|---|---|
+| **Terminal (ASCII)** | The live conversation — inline, where nothing else renders | `primer_view.py ascii --id <fig>`, or hand-drawn box-drawing for a quick sketch |
+| **Artifact (markdown)** | Reading the lesson later, on GitHub or in an editor | Mermaid block, rendered natively by GitHub |
+| **View page (HTML)** | The rich version — full-size SVG, the faded reveal, explorables | `primer_view.py render <artifact.md>`; learner clicks a `file://` link |
 
-GitHub renders Mermaid blocks natively. Always include a one-line caption above each block.
+Never author the same figure twice by hand. If it needs to appear in two channels, it's one spec and two renderings.
 
-````markdown
-*Figure: Raft leader election under network partition.*
+## The view page
 
-```mermaid
-sequenceDiagram
-    participant L as Leader (term 4)
-    participant F1 as Follower
-    participant F2 as Follower (partitioned)
-    L->>F1: AppendEntries (term=4)
-    F1-->>L: ack
-    Note over F2: Election timeout fires
-    F2->>F2: Becomes candidate, term=5
-```
-````
+`$DATA_DIR/lessons/<domain>/<YYYY-MM-DD>-<slug>.view.html` — one self-contained file the learner opens locally by clicking a link the Primer prints in the terminal.
 
-## ASCII (terminal-side)
+Non-negotiables it inherits:
 
-Use ASCII for:
+- **Zero external requests.** Inline CSS, inline JS, inline SVG, `data:` URIs only. No CDN, no web fonts, no remote images, no analytics. It works offline, and opening it tells nobody. The validator enforces this — it is not a promise.
+- **Private instance only.** The page lives beside the lesson, inside the learner's private data repo. It is never written to the public core, and it is never published. (Publishing a *sanitized* view is the same deliberate derivation step reserved for lessons themselves — opt-in, not default.)
+- **Derived, not source.** The page is regenerated from the artifact, so markdown stays the source of truth. It's gitignored in the instance; the artifact syncs and the page rebuilds. (Contrast `.STATE.md`, which *is* checkpoint state and must sync.)
+- **Theme-aware, and never color-only.** Light and dark both work; anything encoded in color is also encoded in shape, position, or label.
 
-- Inline diagrams during the live conversation, where Mermaid wouldn't render.
-- Quick sketches the learner asks for ("show me the layout").
-- Tables of small data.
+## ASCII, for the live session
 
-Style: Unicode box-drawing characters (`┌─┐│└┘├┤┬┴┼` and arrows `→ ← ↑ ↓`) — they render in any modern terminal and copy cleanly into markdown.
+Use Unicode box-drawing (`┌─┐│└┘├┤┬┴┼`, arrows `→ ← ↑ ↓`) — renders in any modern terminal and copies cleanly into markdown.
 
 ```
    ┌──────────┐  AppendEntries  ┌──────────┐
@@ -48,11 +39,11 @@ Style: Unicode box-drawing characters (`┌─┐│└┘├┤┬┴┼` and a
    commit index advances
 ```
 
-When the artifact needs both — render Mermaid in the artifact and ASCII inline during the session.
+Keep inline ASCII small — four or five elements. Anything bigger belongs on the view page; say so and hand over the link.
 
 ## Tables for tradeoffs
 
-For tradeoff comparisons, prefer markdown tables. They render everywhere and grep cleanly.
+Tradeoff comparisons are tables, always. They render everywhere and grep cleanly. This is not a fallback; a table is the *right* form for rows-and-columns data, and drawing it instead is a downgrade.
 
 | Pattern | Operational cost | Latency | Consistency | When to reach for it |
 |---|---|---|---|---|
@@ -62,7 +53,10 @@ For tradeoff comparisons, prefer markdown tables. They render everywhere and gre
 
 ## Anti-patterns
 
-- Drawing what could be a table. If the data is rows-and-columns, use a table.
-- Mermaid diagrams without captions. Every figure has a label.
-- Decorative emoji. Reserved characters (`✓ ✗ →`) for content-bearing meaning are fine; smiley faces are not.
-- Generating images. Out of scope for v1. If a concept truly needs an image, link to an authoritative external source.
+- **Drawing what could be a table.** Rows and columns → table.
+- **A figure without a caption, or without a stated invariant.** Every figure makes exactly one claim, and says it.
+- **A decorative figure.** Removing seductive detail is one of the largest measured effects in multimedia learning — a figure that carries no invariant is a net cost, not a neutral addition.
+- **Handing over a complete diagram.** The default is the faded variant: blank the causal step, ask for a prediction, then reveal. Learner-generated beats learner-shown (`diagramming.md`).
+- **An explorable for engagement.** Interactivity earns its place only when a parameter's variation *is* the insight. Otherwise it's a toy that costs attention.
+- **Decorative emoji.** Content-bearing marks (`✓ ✗ →`) are fine; smileys are not.
+- **Generated raster images.** Still out of scope, and not for lack of capability: a diagram spec is inspectable, diffable, correctable, and regenerable, and a PNG is none of those. If a concept genuinely needs a photograph or a rendered artwork, link an authoritative external source instead.
