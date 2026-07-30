@@ -89,9 +89,22 @@ conversation, never from reading the code.
 - `/primer review` — interleaved spaced-retrieval warm-up from prior lessons
 - `/primer resume` — pick up an in-progress lesson
 - `/primer view [lesson]` — open a lesson's visual page (figures, faded reveals, explorables)
+- `/primer update` — get the latest engine and migrate your data repo (no git knowledge needed)
 - `/primer index` — show topic-index tree with status
 - `/primer profile` — show or update your profile
 - `/primer suggest <goal>` — propose a multi-lesson track for a stated goal
+
+## Staying up to date
+
+`/primer update` does both halves in one step: fast-forwards the engine and adds anything new that your private data repo is missing (a release that adds a state file would otherwise leave your instance erroring out). You don't need to know git — and it refuses rather than guesses if your checkout has local changes, so nothing of yours gets discarded.
+
+You don't have to remember to check. primer looks once a day, at the moment you run it, and prints a single line if something is waiting. Offline or on a fork, it stays quiet rather than nagging or erroring.
+
+## Where it runs
+
+primer is a Claude Code skill, so it works anywhere Claude Code reads your local skills: the **terminal CLI**, the **desktop app**, and IDE extensions. The desktop app is the nicer place for the visual layer — the lesson's view page is a local HTML file you click open, so a real browser renders the figures and explorables instead of ASCII in a terminal.
+
+Two limits worth knowing. **Cloud and Cowork sessions don't read `~/.claude/skills/`** — they load skills from your claude.ai account, and they can't reach your private data repo or open a `file://` page on your machine, so primer is a local-session tool by design. And **your instance lives on the machine you're on**; syncing it across machines is a `git pull` in your data repo (or `/primer update`, which leaves your data alone but tells you what's missing).
 
 ## Design principles
 
