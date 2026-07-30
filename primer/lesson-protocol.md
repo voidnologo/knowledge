@@ -65,7 +65,9 @@ Text paired with diagrams is one of the largest and most consistent effects in t
 2. **Ask for a specific prediction** — "what has to happen at that step for the commit to be safe?", not "what goes there?".
 3. **Then reveal**, and refine what they said rather than replacing it.
 
-Mechanics: read `primer/visuals.md` for the channels and `primer/diagramming.md` for form selection and the spec format. Write the figure spec once, as a `<!--primer-figure ... -->` block in the artifact; render the terminal version with `primer_view.py ascii` and the page with `primer_view.py render`. Both honour the blank, so neither channel spoils the other. **Never hand over a page that failed validation** — the generator exits non-zero with the specific problem.
+Mechanics: read `primer/visuals.md` for the channels and `primer/diagramming.md` for form selection and the spec format. Write the figure spec once, as a `<!--primer-figure ... -->` block; render the terminal version with `primer_view.py ascii` and the page with `primer_view.py render`. Both honour the blank, and a `blank` id that matches nothing is a hard error in both — so neither channel can spoil the other. **Never hand over a page that failed validation** — the generator exits non-zero with the specific problem.
+
+Mid-lesson, the spec's home is the in-progress `.STATE.md` sidecar (the extractor reads any markdown, so `ascii` works against it directly). At Recap the block moves into the finished artifact, which is where it lives permanently.
 
 A figure earns its place only if you can state the one invariant it makes visible. Removing seductive detail is itself one of the largest measured effects, so a figure that carries no invariant is a cost, not a decoration. Fade figure density with depth exactly as worked examples fade.
 

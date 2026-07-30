@@ -12,6 +12,11 @@ initial_prompt
 # In-progress lesson sidecars (lessons/**/*.STATE.md) are intentionally NOT ignored —
 # they sync across machines so a paused lesson can resume on another (see primer/lesson-template.md).
 
+# Generated lesson view pages. Belt-and-braces: personal lessons live in the private
+# instance, but D-0009's dev fallback lets $DATA_DIR resolve to this repo root, and a
+# rendered page must never land in the public core.
+*.view.html
+
 # Editor / OS noise
 *.swp
 *.swo

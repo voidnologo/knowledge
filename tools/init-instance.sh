@@ -79,6 +79,16 @@ README
   echo "Initialized git repo in $DATA_DIR"
 fi
 
+# Derived-product rules have to reach instances that already exist, not just new ones —
+# an instance created before the visual layer would otherwise commit generated view
+# pages. Appended idempotently; never rewrites an existing gitignore.
+VIEW_IGNORE='lessons/**/*.view.html'
+if [[ -f "$DATA_DIR/.gitignore" ]] && ! grep -qF "$VIEW_IGNORE" "$DATA_DIR/.gitignore"; then
+  printf '\n# Derived: regenerated from the lesson artifact by primer_view.py\n%s\n' \
+    "$VIEW_IGNORE" >> "$DATA_DIR/.gitignore"
+  echo "Added '$VIEW_IGNORE' to $DATA_DIR/.gitignore (generated pages are not synced)"
+fi
+
 # Per-machine pointer. Don't clobber an existing one without telling the user.
 mkdir -p "$CONFIG_DIR"
 if [[ -f "$CONFIG_FILE" ]] && grep -q '^DATA_DIR=' "$CONFIG_FILE"; then

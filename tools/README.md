@@ -62,12 +62,32 @@ at the worst moment and is where malformed output comes from.
 plus one restricted arithmetic formula per output; the wiring is generated. AI-generated interactives
 measurably fail at state management, so the contract is made structurally true rather than trusted.
 
-`render` validates before reporting success and exits non-zero with the specific problem. Five checks:
-figure well-formedness (each SVG parses as XML), no external requests (nothing on the page phones
-home), caption coverage, contract satisfaction (every declared input is listened to, every declared
-output is written), and faded-reveal integrity (a blanked figure's answer is unreachable until the
-learner commits). **Never show the learner a page that failed validation** — fix the spec and re-run.
+`render` validates **before writing**, and exits non-zero with the specific problem — the output path
+is deterministic and the learner is told to click it, so a page that failed validation must never
+exist there, nor destroy a valid earlier one. Six checks:
 
-Blanks are honoured in the ASCII rendering too, so the terminal can't spoil what the page gates.
+1. **comment integrity** — exactly one comment terminator (the manifest's). A spec string containing
+   `-->` would otherwise close the manifest comment and expose the rest to the HTML parser.
+2. **figure well-formedness** — each generated SVG parses as XML; a malformed figure renders blank.
+3. **no external requests** — scanned per tag attribute (so `srcset`, `poster`, `data`, and
+   `http-equiv=refresh` are caught), plus `@import`/remote `url()` in styles and `fetch`/`eval`/
+   `XMLHttpRequest` in scripts, plus any inline `on*` handler. A `Content-Security-Policy` meta tag
+   backs it at runtime, because a regex over generated markup can be outrun and a browser policy
+   can't. `data:` and `file:` are local and permitted.
+4. **caption coverage** — every figure has a caption, and it reached the document.
+5. **contract satisfaction** — every declared input has a control and a listener; every declared
+   output has a readout and an assignment.
+6. **faded-reveal integrity** — a blanked figure's answer sits inside that figure's own closed
+   `<details>` and nowhere else, checked structurally per figure.
+
+**Never show the learner a page that failed validation** — fix the spec and re-run.
+
+Spec strings are model-authored, so they are treated as untrusted: ids are constrained to a safe
+character set, slider bounds are coerced to numbers, and formulas are *parsed as arithmetic* rather
+than filtered for allowed characters (a legal token sequence can still be illegal JavaScript —
+`1/*2` opens a comment, a lone `(` kills the script block).
+
+Blanks are honoured in the ASCII rendering too, and an unknown `blank` id is a hard error there as
+well — that channel is what the learner sees *during* the prediction beat, before the page exists.
 
 See `primer/diagramming.md` for the spec format and how to choose a form.
