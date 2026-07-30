@@ -52,8 +52,9 @@ See `proposals/0002-…md`. Decisions resolved:
 
 See `proposals/0003-visual-layer-and-capability-refresh.md`; evidence in `research/2026-07-30-capability-and-evidence-refresh.md`. Maintainer-stated next tasks are **Wave A (presentation)** and **Wave E (research)**, with **M1 first** so the added instructions fit the context budget.
 
-- [ ] **M1** — progressive disclosure for the engine (stop static-loading all 8 engine files, ~15k tokens, on every invocation).
-- [ ] **Wave A** — V1 `diagramming.md` + `visuals.md` rewrite ("no images in v1" is superseded); V2 local `<slug>.view.html` (single file, zero external requests); V3 contracted explorables; V4 `tools/primer_view.py` generate+validate; V5 `/primer view` verb + Deepen-step hook; V6 figure template library.
+- [x] **M1** — progressive disclosure: only `system-prompt.md` is static; the rest are an on-demand load table routed per verb. (D-0022, PR #5)
+- [x] **Wave A** — V1 `diagramming.md` + `visuals.md` rewrite; V2 local `<slug>.view.html` (single file, zero external requests, gitignored derived product); V3 contracted explorables (generated wiring, no model-authored JS); V4 `tools/primer_view.py` render+validate (5 gates) + 56 tests; V5 `/primer view` verb, Deepen-step blanked-figure beat, lesson-template spec convention, instance gitignore; V6 six-form figure template library with blanked variants. (D-0023, D-0024, PRs #5/#6/#7)
+- [ ] **Wave A follow-ups** — author figures for the first real lesson and see which forms the template library is missing; promote load-bearing shapes in (the library accretes like the canon). Consider ASCII renderers for `state`/`curve` if the terminal beat wants them.
 - [ ] **Wave E** — R1 `research-protocol.md`; R2 discovery pass in a subagent; R3 `tools/primer_sources.py` + `learner/source-ledger.md`; R4 per-domain research cache + claim-level provenance.
 - [ ] **Wave B** (next block) — H1 examiner subagent at Recap (breaks the tutor-grades-itself loop); H2 sycophancy trap set; H3 count the "just show me" escape hatch.
 - [ ] **M2** revisit D-0020c → FSRS-6 with pretrained defaults; **M3** ground prompt generation in graded exemplars (+ fix bad-prompt-vs-forgotten conflation).

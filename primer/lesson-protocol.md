@@ -50,12 +50,24 @@ The body of the lesson.
 1. **Primitives** — what's the underlying problem, before any tool? State it cleanly.
 2. **Failure modes** — what specifically goes wrong without the pattern? Make it concrete with a scenario.
 3. **The pattern** — introduce it now, after the problem demands it.
-4. **Worked example** — fully solved walkthrough. Diagrams (Mermaid + ASCII).
+4. **Worked example** — fully solved walkthrough. Diagrams (see *Figures* below).
 5. **Faded example** — same shape, blanks in the key reasoning steps. Ask the learner to fill them.
 6. **Free problem** — adjacent problem, learner solves it. Optional, depending on session length.
 7. **Tradeoffs** — when does this beat the alternative? When does it lose?
 
 For senior learners, **fade fast.** Skip step 4 if the depth marker says they've done worked examples in this domain.
+
+### Figures — blanked first, then revealed
+
+Text paired with diagrams is one of the largest and most consistent effects in the multimedia-learning evidence, and it holds for transfer as well as recall. But the effect that matters most is on *learner-generated* representations, so a figure handed over complete is a figure received. The figure beat therefore runs the same shape as the rest of the protocol:
+
+1. **Show the figure blanked, before the pattern is named** — the element carrying the invariant is a `?`. Inline ASCII in the terminal; the full version on the view page.
+2. **Ask for a specific prediction** — "what has to happen at that step for the commit to be safe?", not "what goes there?".
+3. **Then reveal**, and refine what they said rather than replacing it.
+
+Mechanics: read `primer/visuals.md` for the channels and `primer/diagramming.md` for form selection and the spec format. Write the figure spec once, as a `<!--primer-figure ... -->` block in the artifact; render the terminal version with `primer_view.py ascii` and the page with `primer_view.py render`. Both honour the blank, so neither channel spoils the other. **Never hand over a page that failed validation** — the generator exits non-zero with the specific problem.
+
+A figure earns its place only if you can state the one invariant it makes visible. Removing seductive detail is itself one of the largest measured effects, so a figure that carries no invariant is a cost, not a decoration. Fade figure density with depth exactly as worked examples fade.
 
 Narrative is welcome — short stories with named characters and concrete numbers beat abstract frameworks. But narrative must earn its keep: if it's not driving the invariant home, cut it.
 
@@ -70,6 +82,8 @@ Then end the session with three artifacts:
 1. **3–5 invariants** — the things worth keeping. State them as falsifiable claims, not summaries.
 2. **5–15 retrieval prompts** — atomic Q/A pairs (Anki-importable). At least 2 must be deep-reasoning (causal/counterfactual), not just recall.
 3. **2–3 next-lesson suggestions** — where this naturally points. Written into `learner/topic-index.md`.
+
+If the lesson carried figures, render the view page from the finished artifact (`primer_view.py render <artifact>`) and hand the learner the `file://` link — the page is the durable version of what was sketched in the terminal, and it stays regenerable from the artifact.
 
 Then update the **volatile** state per `primer/feedback-protocol.md` (depth markers + ZPD edge + status → `topic-index.md`, with confidence + evidence; any calibration misses → `calibration-log.md`; retrieval prompts → `review-queue.md`; open threads → `open-questions.md`) and append one line to `learner/log.md`. Stable traits in `profile.md` change only at `recalibrate`, not here.
 
