@@ -23,3 +23,5 @@ jobs:
         run: python3 tools/test_primer_state.py
       - name: primer_view tests
         run: python3 tools/test_primer_view.py
+      - name: primer_sources tests
+        run: python3 tools/test_primer_sources.py

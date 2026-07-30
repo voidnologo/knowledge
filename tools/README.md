@@ -10,6 +10,8 @@ Helper scripts for primer. All are self-contained (no third-party installs).
 | `test_primer_state.py` | Unit tests for `primer_state.py`. Run: `python3 tools/test_primer_state.py`. |
 | `primer_view.py` | **Figure templates + the local view page** — renders a lesson artifact's figure specs into a self-contained HTML page, and validates it before the learner sees it. |
 | `test_primer_view.py` | Unit tests for `primer_view.py`. Run: `python3 tools/test_primer_view.py`. |
+| `primer_sources.py` | **The source ledger** — what has been vetted, what has gone stale, what still needs grounding. Makes the mandatory discovery pass cheaper the more it runs. |
+| `test_primer_sources.py` | Unit tests for `primer_sources.py`. Run: `python3 tools/test_primer_sources.py`. |
 
 ## `primer_state.py`
 
@@ -91,3 +93,39 @@ Blanks are honoured in the ASCII rendering too, and an unknown `blank` id is a h
 well — that channel is what the learner sees *during* the prediction beat, before the page exists.
 
 See `primer/diagramming.md` for the spec format and how to choose a form.
+
+## `primer_sources.py`
+
+Python 3.11+ stdlib only. Owns the deterministic half of the source-discovery pass
+(`primer/research-protocol.md`), against `$DATA_DIR/learner/source-ledger.md`.
+
+```
+python3 tools/primer_sources.py --data-dir "$DATA_DIR" <command>
+```
+
+Commands:
+
+- `sources-add --url U --domain D [--tag verified|from-training] [--verdict cite|caveat|dropped] --why "..." [--floor]` — record a vetted source. Idempotent per URL: re-adding refreshes `checked`, bumps `used`, keeps the original `seen`.
+- `sources-check --url U [--days N]` — already vetted? what verdict? still fresh? **Ask this before sweeping.**
+- `sources-stale [--days N]` — entries past the freshness horizon (default 90d, matching the canon's ~3-month rule), most-used first.
+- `sources-unverified` — the `[from-training, verify]` backlog.
+- `sources-floor [--domain D]` — the learner's accreted floor: a lesson's starting set.
+- `sources-promote --url U` — mark a source as floor.
+- `sweep-record --domain D [--note ...]` / `sweep-check --domain D [--days N]` — when the domain last had a full sweep, and whether a narrow top-up will do.
+
+`--on YYYY-MM-DD` overrides "today". `--data-dir` overrides the path otherwise read from
+`~/.config/primer/config`.
+
+**Why it exists.** Currency is primer's top non-negotiable and was the only one with no code
+behind it: the mandatory per-lesson pass was pure prose, so it got reconstructed from scratch
+every session with hand-computed dates and no memory of prior verdicts. The ledger inverts the
+economics — a source vetted inside the horizon is reused, not re-swept — which is what makes
+"every lesson runs the pass" sustainable rather than something that quietly degrades.
+
+**Promotion writes here, not to the public core.** `primer/source-canon.md` ships in a repo the
+learner pulls updates into, so a per-learner promotion there would leak what they study and
+conflict on every pull. The ledger is the learner's own floor (D-0025).
+
+Values come from web pages and model output, so they are treated as untrusted: the file is
+pipe-delimited, and a `|`, newline, non-`http(s)`/`file` scheme, or over-long field is rejected
+with an actionable message rather than escaped into a line that would corrupt the ledger.
