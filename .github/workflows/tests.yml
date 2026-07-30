@@ -27,3 +27,5 @@ jobs:
         run: python3 tools/test_primer_sources.py
       - name: primer_update tests
         run: python3 tools/test_primer_update.py
+      - name: primer_eval tests
+        run: python3 tools/test_primer_eval.py

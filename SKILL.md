@@ -35,6 +35,7 @@ The `primer/*` files are the **engine** — they ship with the public core. Only
 | `primer/anti-patterns.md` | same time as `lesson-protocol.md` | the session-end self-check |
 | `primer/intake-protocol.md` | `init` | the cold-start interview |
 | `primer/feedback-protocol.md` | Recap state updates, `recalibrate`, `review` | moving any depth marker or confidence |
+| `primer/examiner-protocol.md` | Recap, before writing any marker change | the examiner pass — the teacher does not grade itself |
 | `primer/lesson-template.md` | writing the lesson artifact | the artifact's structure and prompt-quality bar |
 | `primer/source-canon.md` | the Deepen step's source-discovery pass | vetting or citing a source |
 | `primer/research-protocol.md` | same time as `source-canon.md` | running the pass — query classes, vetting procedure, recording verdicts |
@@ -87,7 +88,8 @@ Run when no instance exists. **Read `primer/intake-protocol.md` first**, then ex
 4. **Run the protocol.** Read `primer/lesson-protocol.md` and `primer/anti-patterns.md`, then run Elicit → Probe → Diagnose → Deepen → Recap. The Deepen step's source-discovery pass is mandatory — read `primer/source-canon.md` (the floor and stale-criteria) and `primer/research-protocol.md` (how the pass runs; ask the ledger before sweeping, and dispatch the sweep to a subagent so it doesn't spend the lesson's context). Use AskUserQuestion sparingly; default to free-form conversation.
 5. **Self-check** against `primer/anti-patterns.md` before writing the artifact.
 6. **Write the artifact** to `$DATA_DIR/lessons/<domain-slug>/<YYYY-MM-DD>-<lesson-slug>.md` per `primer/lesson-template.md` (read it). Include retrieval prompts. Promote any load-bearing newly-discovered source into the learner's ledger with `primer_sources.py sources-promote` — **not** into `primer/source-canon.md`, which is public-core and never written by a lesson (D-0025). If the lesson carried figures, write the view page (see `/primer view`).
-7. **Update state** (read `primer/feedback-protocol.md`):
+7. **Examine before you update.** Read `primer/examiner-protocol.md` and run the examiner pass: spawn a subagent with the learner's answers and the lesson's invariants but **not** your proposed marker change, prompted to argue against an upgrade. Agree → apply. Disagree → hold confidence, log `examiner-disagree`, queue a reprobe. This is the check on *your* judgment; the cold-retrieval anchors only check the learner's.
+8. **Update state** (read `primer/feedback-protocol.md`):
    - Append retrieval prompts via the scheduler (one call per prompt; it sets the initial schedule — don't hand-write the scheduled lines): `python3 ${CLAUDE_SKILL_DIR}/tools/primer_state.py --data-dir "$DATA_DIR" review-add --domain <d> --question "<q>" --answer "<a>"`.
    - Append open threads to `$DATA_DIR/learner/open-questions.md`.
    - Update the domain's depth marker in `$DATA_DIR/learner/topic-index.md`: depth, `[confidence]`, evidence (this session). Mark the topic covered/in-progress; refresh ZPD edges and suggested next.

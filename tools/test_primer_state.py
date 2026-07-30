@@ -167,5 +167,70 @@ class TestCLI(unittest.TestCase):
             self.assertEqual(after[0][1].reps, 3)
 
 
+class TestHatchTrend(unittest.TestCase):
+    """The escape hatch is right to have; an unnoticed *rise* in its use is the problem."""
+
+    LOG = [f"2026-07-{d:02d} | lesson | 60m | a lesson" for d in range(10, 22)]
+
+    def hatch(self, day: int, domain: str) -> str:
+        return (f"2026-07-{day:02d} | {domain} | {ps.HATCH_TYPE} | "
+                f"learner asked for the answer directly | note")
+
+    def test_no_hatches_is_no_trend(self):
+        self.assertEqual(ps.hatch_trend([], self.LOG), [])
+
+    def test_rate_is_per_lesson_not_per_day(self):
+        # A learner who takes a month off has not become more dependent.
+        calib = [self.hatch(20, "docker"), self.hatch(21, "docker")]
+        trends = ps.hatch_trend(calib, self.LOG, window=10)
+        self.assertEqual((trends[0].domain, trends[0].hatches), ("docker", 2))
+        self.assertEqual(trends[0].lessons, 10)
+        self.assertAlmostEqual(trends[0].rate, 0.2)
+
+    def test_window_excludes_older_uses(self):
+        calib = [self.hatch(10, "docker"), self.hatch(21, "docker")]
+        trends = ps.hatch_trend(calib, self.LOG, window=3)
+        self.assertEqual(trends[0].hatches, 1)
+
+    def test_sorted_by_rate_then_domain(self):
+        calib = [self.hatch(20, "docker"), self.hatch(21, "docker"),
+                 self.hatch(21, "consensus")]
+        trends = ps.hatch_trend(calib, self.LOG, window=10)
+        self.assertEqual([t.domain for t in trends], ["docker", "consensus"])
+
+    def test_other_miss_types_are_not_counted(self):
+        other = "2026-07-21 | docker | vocabulary-gap | used a term early | define first"
+        self.assertEqual(ps.hatch_trend([other], self.LOG), [])
+
+    def test_malformed_lines_are_ignored(self):
+        for bad in ("", "not a log line", f"nodate | d | {ps.HATCH_TYPE} | x | y",
+                    f"2026-07-21 | {ps.HATCH_TYPE}"):
+            with self.subTest(line=bad):
+                self.assertEqual(ps.hatch_trend([bad], self.LOG), [])
+
+    def test_zero_lessons_does_not_divide_by_zero(self):
+        self.assertEqual(ps.hatch_trend([self.hatch(21, "d")], []), [])
+
+    def test_hatch_use_counts_toward_the_recalibrate_trigger(self):
+        # Repeated hatch use means the register is mis-set, which is exactly what the
+        # minor recalibrate exists to correct — so it should fire it.
+        calib = [self.hatch(18 + i, "docker") for i in range(4)]
+        decision = ps.recalibrate_check(self.LOG, calib)
+        self.assertTrue(decision.fire)
+
+    def test_log_then_trend_round_trips_through_the_cli(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            learner = Path(tmp) / "learner"
+            learner.mkdir(parents=True)
+            (learner / "calibration-log.md").write_text("# Calibration log\n")
+            (learner / "log.md").write_text("\n".join(self.LOG) + "\n")
+            argv = ["--data-dir", tmp, "--on", "2026-07-21"]
+            self.assertEqual(ps.main([*argv, "hatch-log", "--domain", "docker"]), 0)
+            self.assertEqual(ps.main([*argv, "hatch-trend"]), 0)
+            calib = (learner / "calibration-log.md").read_text().splitlines()
+            self.assertEqual(len(ps.hatch_trend(calib, self.LOG)), 1)
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

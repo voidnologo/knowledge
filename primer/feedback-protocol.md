@@ -25,7 +25,7 @@ Miss types to watch for:
 - vocabulary gap (used a term before establishing it)
 - dead analogy (the framing didn't connect)
 - pacing off (rushed or dragged)
-- struggle-tolerance mismatch (learner bounced off a Socratic probe and wanted the answer)
+- struggle-tolerance mismatch (learner bounced off a Socratic probe and wanted the answer) — **log it**: `primer_state.py hatch-log --domain <d>`. The "just show me" hatch is the right call in the moment, but a *rising* rate is the AI-dependence signal, and it was invisible until it was counted. `hatch-trend` reports the rate per domain over the last N lessons; read it at recalibrate as "the register is mis-set for this learner here", not as a failure.
 
 ## Timescale 2 — end of each lesson (signal capture)
 
@@ -61,6 +61,8 @@ The depth markers are the Primer's *own* assessment of the learner. A loop that 
 - **Always-on — the Elicit-step recall** (`primer/lesson-protocol.md`): every lesson in a domain with prior coverage opens by asking the learner to recall a prior invariant. This rides the lesson flow, so the anchor fires whether or not the learner ever runs a separate review. It is the primary anchor, because it doesn't depend on a habit the learner may not form.
 - **Optional — `/primer review`**: a deliberate cold-retrieval pass over the queue, for learners who want spaced refreshers. Not every learner will; the loop must not depend on it.
 - **Passive guard — time decay** (above): when no retrieval happens at all, confidence still lapses toward reprobe rather than sitting high forever.
+
+All three anchor the *learner's recall*. None checks the *Primer's judgment*, which is the weaker half: models judge a correct answer at 94–99% F1 and a valid-but-unconventional one at 0–76% — and the valid-but-unconventional answer is what a senior learner produces. That gap is what `primer/examiner-protocol.md` closes: at Recap a separate examiner, which never sees the proposed delta, argues against an upgrade. Agreement applies it; disagreement holds confidence and queues a reprobe. Disagreement is information, not a tie to break.
 
 A miss in either retrieval path is evidence the model didn't generate this session, so it feeds back hard:
 

@@ -365,6 +365,98 @@ def cmd_recalibrate_check(args: argparse.Namespace) -> int:
     return 0
 
 
+# --- Escape-hatch trend (dependence signal) -------------------------------
+# T7's "just show me" hatch is the right call — misaligned Socratic pressure causes
+# overload — but a *rising* rate is precisely the AI-dependence signal the cognitive-
+# offloading literature describes, and it was invisible: nothing counted it. It is logged
+# as an ordinary calibration miss (a struggle-tolerance mismatch, which is what it is, and
+# what minor recalibrate should act on) with a fixed type token so the rate is computable.
+HATCH_TYPE = "escape-hatch"
+# Enough lessons for a rate to mean something without averaging away a recent change.
+HATCH_WINDOW = 10
+
+
+@dataclass
+class HatchTrend:
+    domain: str
+    hatches: int
+    lessons: int
+
+    @property
+    def rate(self) -> float:
+        return self.hatches / self.lessons if self.lessons else 0.0
+
+
+def hatch_trend(calib_lines: list[str], log_lines: list[str],
+                window: int = HATCH_WINDOW) -> list[HatchTrend]:
+    """Escape-hatch uses per domain over the last `window` lessons.
+
+    The denominator is lessons, not calendar time: a learner who takes a month off has not
+    become more dependent, and a rate over days would say they had.
+    """
+    lesson_dates = sorted(_dated(log_lines, mode="lesson"))
+    if not lesson_dates:
+        return []
+    since = lesson_dates[-window] if len(lesson_dates) >= window else lesson_dates[0]
+    in_window = [d for d in lesson_dates if d >= since]
+    counts: dict[str, int] = {}
+    for line in calib_lines:
+        parsed = _hatch_entry(line)
+        if parsed is None:
+            continue
+        when, domain = parsed
+        if when >= since:
+            counts[domain] = counts.get(domain, 0) + 1
+    trends = [HatchTrend(d, n, len(in_window)) for d, n in counts.items()]
+    return sorted(trends, key=lambda t: (-t.rate, t.domain))
+
+
+def _hatch_entry(line: str) -> tuple[date, str] | None:
+    parts = [p.strip() for p in line.strip().lstrip("- ").split("|")]
+    if len(parts) < 3 or parts[2] != HATCH_TYPE:
+        return None
+    try:
+        return date.fromisoformat(parts[0]), parts[1]
+    except ValueError:
+        return None
+
+
+def _dated(lines: list[str], mode: str | None = None) -> list[date]:
+    out: list[date] = []
+    for line in lines:
+        m = DATED_RE.match(line.strip())
+        if not m:
+            continue
+        if mode is not None and (m["mode"] or "") != mode:
+            continue
+        out.append(date.fromisoformat(m["date"]))
+    return out
+
+
+def cmd_hatch_log(args: argparse.Namespace) -> int:
+    path = _learner(resolve_data_dir(args.data_dir), "calibration-log.md")
+    note = args.note or "consider lowering the struggle-tolerance setting for this domain"
+    entry = (f"{_today(args).isoformat()} | {args.domain} | {HATCH_TYPE} | "
+             f"learner asked for the answer directly | {note}")
+    _write_lines(path, _read_lines(path) + [entry])
+    print(f"logged: {entry}")
+    return 0
+
+
+def cmd_hatch_trend(args: argparse.Namespace) -> int:
+    data_dir = resolve_data_dir(args.data_dir)
+    trends = hatch_trend(_read_lines(_learner(data_dir, "calibration-log.md")),
+                         _read_lines(_learner(data_dir, "log.md")), args.window)
+    if not trends:
+        print("no escape-hatch uses recorded in the window")
+        return 0
+    for t in trends:
+        print(f"{t.domain}\t{t.hatches}/{t.lessons} lessons\t{t.rate:.0%}")
+    print("A rising rate is a dependence signal, not a failure — read it as the register "
+          "being mis-set for this learner in this domain, and act at recalibrate.")
+    return 0
+
+
 def _today(args: argparse.Namespace) -> date:
     # --on lets tests and back-dating pin 'today'; otherwise the system date.
     return date.fromisoformat(args.on) if getattr(args, "on", None) else date.today()
@@ -403,6 +495,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("recalibrate-check", help="is a minor recalibrate due?")
     p.set_defaults(func=cmd_recalibrate_check)
+
+    p = sub.add_parser("hatch-log", help="record a 'just show me' escape-hatch use")
+    p.add_argument("--domain", required=True)
+    p.add_argument("--note", default="")
+    p.set_defaults(func=cmd_hatch_log)
+
+    p = sub.add_parser("hatch-trend", help="escape-hatch rate per domain (dependence signal)")
+    p.add_argument("--window", type=int, default=HATCH_WINDOW)
+    p.set_defaults(func=cmd_hatch_trend)
 
     return parser
 
