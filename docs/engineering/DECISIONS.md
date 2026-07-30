@@ -6,6 +6,45 @@ Format: decision, context, alternatives considered, tradeoff accepted.
 
 ---
 
+## D-0029 · 2026-07-30 · A stated guarantee gets a test written from the prose, not from the code
+
+**Decision:** Where the engine documents a guarantee in prose, the test for it is derived from the prose and asserts the *learner-visible outcome* — not from the implementation. Concretely, three properties become tested rather than assumed: (a) a blanked figure's rendered output does not contain the answer *in any channel*, geometry included; (b) two renderers of one spec agree on blanking and on label handling; (c) a documented input budget is enforced identically everywhere the spec is consumed.
+
+**Context:** The first live run of v0.5.2 produced five findings that share a shape and that every existing test passed. The sharpest is the faded figure: a blanked `timeline` span renders at its true coordinates in both ASCII and HTML, so the position answers the prediction while the label shows `?`, and `primer_view.py render` reports `faded-reveal integrity: passed`. The check is real and it verifies the wrong thing — that the reveal *element* is DOM-gated. `diagramming.md` promises something stronger: *"The blanked ASCII rendering honours the same blanks, so the terminal can't spoil the page"* and *"you cannot accidentally hand it over."* Both promises are false for any element whose claim lives in its position rather than its label, which is the whole `timeline` form — the form `diagramming.md` itself recommends for concurrency invariants.
+
+Second instance, same session, same subsystem: `ascii` silently truncated a 15-character label against a documented 34-character budget, where the documented rule is *"The generator rejects it instead"* of clipping. The HTML channel rendered it correctly.
+
+The generalisation is that **97 passing tests were consistent with a validated page that hands over the answer**, for the same reason Session 3's review-loop lesson found 56 passing tests consistent with six exploitable holes: tests written against an implementation encode that implementation's view of what it is doing. A guarantee written for a human reader is a different artifact from the code that allegedly provides it, and only the former says what the learner is owed.
+
+A sub-pattern worth encoding on its own: **where one spec has two renderers, the unvalidated one drifts, and it is usually the one with the tighter feedback loop.** `render` has six checks and exits non-zero; `ascii` has no validation at all — and `ascii` is the channel that goes to the learner live, mid-lesson, with no opportunity to inspect it first.
+
+**Alternatives:** add the missing checks case-by-case as they surface (rejected — that is what produced the current state; each of these passed because nobody asked the prose what it promised); drop the strong claims from the docs to match the implementation (rejected — the faded-figure guarantee is load-bearing pedagogy, not a nicety, and weakening the prose to fit the code inverts which one is the specification); trust review rather than tests (rejected — a reviewer read this subsystem adversarially in Session 3, found six criticals, and did not find this one, because the blanking hole is only visible when you render a figure whose invariant is positional).
+
+**Tradeoff:** writing tests from prose is slower and fuzzier than testing functions, and some prose is too vague to test — which is itself useful signal about which guarantees are actually specified. Accepted in exchange for the class of defect that unit tests structurally cannot reach.
+
+## D-0028 · 2026-07-30 · The examiner's outcome table gains a third row; `med` confidence decays
+
+**Decision:** Two corrections to the feedback loop, both surfaced by first live use, and both requiring a choice rather than a patch.
+
+(a) **Examiner outcomes become three, not two.** Add: *agree on direction, differ on magnitude* → **apply the more conservative read**, log it, and queue the reprobe. The existing two rows — agree → apply, disagree → hold — do not cover it, and "hold" is actively wrong in that case.
+
+(b) **`[confidence: med]` markers decay toward reprobe**, not only `high` → `med`. The passive time-decay guard applies from `med` upward.
+
+**Context (a):** At Recap the examiner and the Primer both read the evidence as a downgrade: the Primer proposed `med → low-med`, the examiner argued `med → low`, resting on the nil cold recall plus the keyword-as-parallelism misconception surfacing twice independently. Neither documented outcome fits. **"Disagree → hold confidence" would have preserved `med` — a value both reads reject** — which is the opposite of what either analysis supports. `examiner-protocol.md`'s asymmetry clause ("disagreement blocks an upgrade but does not block a downgrade") is what makes applying the steeper read defensible, but that is inference from a sentence about a different case, not a documented outcome. Logging it as `examiner-disagree` also pollutes a rate defined for "confidence was held and a reprobe queued," which is not what happened.
+
+Taking the *more conservative* read rather than the Primer's is the only choice consistent with why the examiner exists. Averaging is explicitly rejected by the protocol; letting the Primer pick between them is the self-adjudication the separation prevents; and preferring the optimistic read is the drift the whole mechanism resists.
+
+**Context (b):** `markers-decay` ran and correctly reported `no markers decayed` — nothing in the instance sits at `high`, and the rule only drifts `high` → `med`. But `feedback-protocol.md` sells decay as a **passive guard**: *"when no retrieval happens at all, confidence still lapses toward reprobe rather than sitting high forever."* For an instance whose markers are all `med` and `low`, that guard does not exist and will not until something reaches `high` — while a `med` marker built from one day's demonstration six weeks earlier is exactly the *"unverified and getting staler"* case the same section describes. It went untouched, and the Elicit-step cold recall is what caught it: the marker claimed the async model was locked, and the learner's cold recall of it returned nothing.
+
+So the always-on anchor did the work the passive guard advertises, and the passive guard was structurally incapable of it. The alternative reading — that `med` already *means* "needs reprobe" — is coherent but is not what the docs say, and it leaves no way to distinguish a `med` earned last week from a `med` earned last quarter. Decay from `med` restores that distinction.
+
+The examiner supplied the supporting principle from the adversarial position: **within-session unprompted derivation did not predict six-week retention, so it should not by itself buy "demonstrated."** Session 3 raised this marker `low → med` on exactly that evidence.
+
+**Alternatives (a):** treat magnitude divergence as agreement and apply the Primer's delta (rejected — the examiner's read was better argued, and defaulting to the teacher's number restores the ratification dynamic withholding the delta exists to break); treat it as disagreement and hold (rejected — preserves a value both reads reject); average (rejected by D-0027 already).
+**Alternatives (b):** decay all levels including `low` (rejected — `low` is already the floor and the protocol's step 3 correctly only *surfaces* stale low markers rather than resolving them); leave decay at `high` only and rely on the Elicit anchor (rejected — the anchor fires only when a lesson happens in that domain, so a domain nobody visits keeps a stale `med` indefinitely, which is the gap in exactly the case decay is for).
+
+**Tradeoff (a):** a third outcome makes the examiner path harder to reason about, and "more conservative" needs care where a downgrade is contested — but the asymmetry already accepted in D-0027 covers it. **(b):** more markers land in reprobe state, so more lessons open with a cold check, spending a little of each session's budget. Given that the one cold check run this session overturned a marker, that cost looks like the point rather than the price.
+
 ## D-0027 · 2026-07-30 · The teacher stops grading itself; sycophancy and escape-hatch use become measured
 
 **Decision:** Wave B, three parts. (a) **An examiner subagent at Recap** (`primer/examiner-protocol.md`) receives the learner's answers and the lesson's invariants but **not** the Primer's proposed marker change, and is prompted to argue against an upgrade. Agree → apply; disagree → hold confidence, log, queue a reprobe; unavailable → apply capped at one step and mark the marker unexamined. (b) **A sycophancy trap set** (`evals/sycophancy/traps.json`) plus a scorer (`tools/primer_eval.py`) that reports **pressure-resolved** rates. (c) **The escape hatch is counted** — `primer_state.py hatch-log` / `hatch-trend`.

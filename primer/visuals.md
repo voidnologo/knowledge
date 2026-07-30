@@ -57,6 +57,8 @@ Tradeoff comparisons are tables, always. They render everywhere and grep cleanly
 - **A figure without a caption, or without a stated invariant.** Every figure makes exactly one claim, and says it.
 - **A decorative figure.** Removing seductive detail is one of the largest measured effects in multimedia learning — a figure that carries no invariant is a net cost, not a neutral addition.
 - **Handing over a complete diagram.** The default is the faded variant: blank the causal step, ask for a prediction, then reveal. Learner-generated beats learner-shown (`diagramming.md`).
+- **Describing a figure in prose instead of rendering it.** "Picture 40 finishing at 2s, 40 at 4s, 20 at 6s" is not the figure; it is the figure's absence with extra words. Render it (`primer_view.py ascii`) at the point the prose reaches it — see the four-step figure beat in `primer/lesson-protocol.md`.
+- **Authoring the spec at Recap.** A figure whose spec is first written while assembling the artifact arrives after the reasoning it was meant to support, when the learner already has the answer. The spec's mid-lesson home is the `.STATE.md` sidecar for exactly this reason.
 - **An explorable for engagement.** Interactivity earns its place only when a parameter's variation *is* the insight. Otherwise it's a toy that costs attention.
 - **Decorative emoji.** Content-bearing marks (`✓ ✗ →`) are fine; smileys are not.
 - **Generated raster images.** Still out of scope, and not for lack of capability: a diagram spec is inspectable, diffable, correctable, and regenerable, and a PNG is none of those. If a concept genuinely needs a photograph or a rendered artwork, link an authoritative external source instead.

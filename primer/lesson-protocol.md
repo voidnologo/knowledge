@@ -61,13 +61,18 @@ For senior learners, **fade fast.** Skip step 4 if the depth marker says they've
 
 Text paired with diagrams is one of the largest and most consistent effects in the multimedia-learning evidence, and it holds for transfer as well as recall. But the effect that matters most is on *learner-generated* representations, so a figure handed over complete is a figure received. The figure beat therefore runs the same shape as the rest of the protocol:
 
-1. **Show the figure blanked, before the pattern is named** — the element carrying the invariant is a `?`. Inline ASCII in the terminal; the full version on the view page.
-2. **Ask for a specific prediction** — "what has to happen at that step for the commit to be safe?", not "what goes there?".
-3. **Then reveal**, and refine what they said rather than replacing it.
+**Run these as four steps, in the conversation, at the point the figure supports the prose.** Not as a description of the channels — as the actual beat:
 
-Mechanics: read `primer/visuals.md` for the channels and `primer/diagramming.md` for form selection and the spec format. Write the figure spec once, as a `<!--primer-figure ... -->` block; render the terminal version with `primer_view.py ascii` and the page with `primer_view.py render`. Both honour the blank, and a `blank` id that matches nothing is a hard error in both — so neither channel can spoil the other. **Never hand over a page that failed validation** — the generator exits non-zero with the specific problem.
+1. **Author the spec** into the in-progress `.STATE.md` sidecar, as a `<!--primer-figure ... -->` block. The extractor reads any markdown, so the sidecar is a working figure source, not just a checkpoint.
+2. **Render it into the conversation** — `primer_view.py ascii <sidecar> --id <fig>` — blanked, before the pattern is named.
+3. **Ask for a specific prediction** — "what has to happen at that step for the commit to be safe?", not "what goes there?". Wait.
+4. **Then reveal**, and refine what they said rather than replacing it.
 
-Mid-lesson, the spec's home is the in-progress `.STATE.md` sidecar (the extractor reads any markdown, so `ascii` works against it directly). At Recap the block moves into the finished artifact, which is where it lives permanently.
+At Recap the block moves into the finished artifact, which is where it lives permanently, and `primer_view.py render` builds the page.
+
+**A figure described in prose instead of rendered is a figure the learner did not receive**, and a spec first written while assembling the artifact is a figure that never had a pedagogical role — by then the answer is known and the drawing is decoration. This is the observed failure mode, not a hypothetical: authoring a spec mid-conversation costs a tool call while describing the shape costs a sentence, so the cheaper path wins under time pressure and produces a lesson that still looks complete. If a figure is worth its `invariant`, it is worth step 1 at the moment it is needed. If it is not worth authoring then, cut it rather than deferring it.
+
+Mechanics: read `primer/visuals.md` for the channels and `primer/diagramming.md` for form selection, the spec format, and **what blanking conceals per form** — it differs, because in some forms the claim lives in the label and in others in the geometry. Both channels conceal identically and a `blank` id that matches nothing is a hard error in both, so neither can spoil the other. **Never hand over a page that failed validation** — the generator exits non-zero with the specific problem.
 
 A figure earns its place only if you can state the one invariant it makes visible. Removing seductive detail is itself one of the largest measured effects, so a figure that carries no invariant is a cost, not a decoration. Fade figure density with depth exactly as worked examples fade.
 

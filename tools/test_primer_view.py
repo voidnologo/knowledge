@@ -5,7 +5,9 @@ The validator tests matter most: they are the reason the Primer can hand a learn
 page without eyeballing it first. Each one breaks a good page in one specific way and
 asserts the corresponding check fires.
 """
+import copy
 import json
+import re
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
@@ -78,10 +80,15 @@ TIMELINE = {
     "id": "gc", "type": "timeline", "caption": "GC pause overlapping a request.",
     "invariant": "A stop-the-world pause lands inside the request, so p99 tracks GC.",
     "blank": ["s2"], "reveal": "It overlaps — the request pays the whole pause.",
+    # The axis is declared, not derived, because s2 is blanked: a derived axis is exactly
+    # the hull of the spans, so it would tell the learner where the blanked span ends.
+    # The declared range leaves room for the wrong answer (a pause landing after the
+    # request) as well as the right one.
     "spec": {"actors": [{"id": "req", "label": "request"}, {"id": "gc", "label": "GC"}],
              "spans": [{"id": "s1", "actor": "req", "start": 0, "end": 40, "label": "p50"},
                        {"id": "s2", "actor": "gc", "start": 25, "end": 70,
                         "label": "stop-the-world"}],
+             "axis": {"min": 0, "max": 120},
              "unit": "ms"},
 }
 
@@ -822,6 +829,141 @@ class TestGeometryEdgeCases(unittest.TestCase):
         svg = pv.render_timeline(spec["spec"], set(), "t")
         ET.fromstring(svg)
         self.assertNotIn('width="-', svg)
+
+
+class TestBlankConcealsTheClaim(unittest.TestCase):
+    """Written from the prose, not the code (D-0029).
+
+    `diagramming.md` promises "you cannot accidentally hand it over" and "the blanked ASCII
+    rendering honours the same blanks, so the terminal can't spoil the page". The
+    pre-existing checks tested that the *reveal element* was gated and that the *label*
+    became `?` — both true while a blanked `timeline` span still rendered at its real
+    coordinates, so position answered the prediction in both channels. These assert the
+    promise instead: nothing the learner is asked to predict is readable before the reveal.
+    """
+
+    # The blanked span sits late on the axis; a leak shows up as geometry near the end.
+    LATE = {
+        "id": "late", "type": "timeline", "caption": "Two waves.",
+        "invariant": "The second wave starts only when the first releases its slot.",
+        "blank": ["w2"], "reveal": "It starts at 2000 — after the first wave finishes.",
+        "spec": {"actors": [{"id": "a", "label": "wave 1"}, {"id": "b", "label": "wave 2"}],
+                 "spans": [{"id": "w1", "actor": "a", "start": 0, "end": 2000,
+                            "label": "held"},
+                           {"id": "w2", "actor": "b", "start": 2000, "end": 4000,
+                            "label": "held"}],
+                 "axis": {"min": 0, "max": 6000}, "unit": "ms"},
+    }
+
+    def test_svg_carries_no_geometry_unique_to_the_blanked_span(self):
+        blanked = pv.render_timeline(self.LATE["spec"], {"w2"}, "late")
+        revealed = pv.render_timeline(self.LATE["spec"], set(), "late")
+        # Every rect the revealed figure draws for w2 must be absent when it is blanked.
+        w2_rects = [r for r in re.findall(r'<rect class="pv-span"[^>]*/>', revealed)
+                    if r not in re.findall(r'<rect class="pv-span"[^>]*/>', blanked)]
+        self.assertTrue(w2_rects, "fixture broken: revealed figure should draw w2")
+        for rect in w2_rects:
+            self.assertNotIn(rect, blanked)
+        # …and what replaces it must span the whole plot, not w2's true extent.
+        region = re.search(r'<rect class="pv-blank-region"[^>]*/>', blanked)
+        self.assertIsNotNone(region, "a blanked span must render an unresolved region")
+        self.assertIn('width="380"', region.group(0))
+
+    def test_ascii_row_of_a_blanked_span_shows_no_filled_cells(self):
+        out = pv.ascii_figure(self.LATE)
+        rows = [r for r in out.splitlines() if "│" in r]
+        self.assertEqual(len(rows), 2)
+        self.assertIn("█", rows[0], "the visible span should still be drawn")
+        self.assertNotIn("█", rows[1], "a blanked span must not be drawn at its position")
+        self.assertIn("░", rows[1], "…it should render as an unresolved field")
+
+    def test_ascii_and_svg_agree_on_what_is_concealed(self):
+        # Parity is the property the prose claims; assert it directly rather than trusting
+        # two implementations to have made the same choice.
+        for ids in ({"w1"}, {"w2"}):
+            with self.subTest(blanked=sorted(ids)):
+                block = dict(self.LATE, blank=sorted(ids))
+                svg = pv.render_timeline(self.LATE["spec"], ids, "late")
+                txt = pv.ascii_figure(block)
+                hidden = next(s for s in self.LATE["spec"]["spans"] if s["id"] in ids)
+                shown = next(s for s in self.LATE["spec"]["spans"] if s["id"] not in ids)
+                # Exactly one unresolved region / field in each channel.
+                self.assertEqual(len(re.findall(r'pv-blank-region', svg)), 1)
+                self.assertEqual(sum("░" in r for r in txt.splitlines() if "│" in r), 1)
+                # The concealed row is the same row in both.
+                rows = [r for r in txt.splitlines() if "│" in r]
+                actors = [a["id"] for a in self.LATE["spec"]["actors"]]
+                self.assertIn("░", rows[actors.index(hidden["actor"])])
+                self.assertIn("█", rows[actors.index(shown["actor"])])
+
+    def test_blanking_a_span_requires_a_declared_axis(self):
+        # A derived axis is exactly the hull of the spans, so it is always wide enough for
+        # the true answer and no wider — the bounds themselves give the position away.
+        spec = copy.deepcopy(self.LATE["spec"])
+        del spec["axis"]
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.render_timeline(spec, {"w2"}, "late")
+        self.assertIn("axis", str(ctx.exception))
+        with self.assertRaises(pv.SpecError):
+            pv.ascii_figure(dict(self.LATE, spec=spec))
+
+    def test_unblanked_timeline_still_derives_its_axis(self):
+        spec = copy.deepcopy(self.LATE["spec"])
+        del spec["axis"]
+        self.assertEqual(pv.timeline_bounds(spec, set(), "late"), (0.0, 4000.0))
+
+    def test_declared_axis_must_contain_every_span(self):
+        spec = copy.deepcopy(self.LATE["spec"])
+        spec["axis"] = {"min": 0, "max": 1000}
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.render_timeline(spec, {"w2"}, "late")
+        self.assertIn("outside the declared axis", str(ctx.exception))
+
+    def test_a_blanked_label_is_still_budget_checked(self):
+        # Otherwise a figure validates while blanked and starts failing on reveal.
+        spec = copy.deepcopy(self.LATE["spec"])
+        spec["spans"][1]["label"] = "x" * 80
+        with self.assertRaises(pv.SpecError):
+            pv.render_timeline(spec, {"w2"}, "late")
+
+
+class TestAsciiLabelBudgetParity(unittest.TestCase):
+    """The ASCII gutter used to be 14 chars wide and clipped silently.
+
+    `diagramming.md` states the rule: a label over the budget is *rejected*, because
+    clipping loses it silently. That held on the page and not in the terminal, so
+    `requests 81-100` — 15 chars against a 34-char budget — rendered as `requests 81-10`,
+    which reads as a different range rather than as a truncation.
+    """
+
+    def _timeline(self, label):
+        return {
+            "id": "t", "type": "timeline", "caption": "c.", "invariant": "i.",
+            "spec": {"actors": [{"id": "a", "label": label}],
+                     "spans": [{"id": "s", "actor": "a", "start": 0, "end": 1,
+                                "label": "held"}], "unit": "ms"},
+        }
+
+    def test_gutter_fits_the_declared_budget(self):
+        self.assertGreaterEqual(pv.GUTTER_W, pv.MAX_LABEL)
+
+    def test_the_regression_label_renders_in_full(self):
+        out = pv.ascii_figure(self._timeline("requests 81-100"))
+        self.assertIn("requests 81-100", out)
+        self.assertNotIn("requests 81-10 ", out.replace("requests 81-100", ""))
+
+    def test_a_label_at_the_budget_limit_survives_both_channels(self):
+        label = "x" * pv.MAX_LABEL
+        block = self._timeline(label)
+        self.assertIn(label, pv.ascii_figure(block))
+        self.assertIn(label, pv.render_timeline(block["spec"], set(), "t"))
+
+    def test_over_budget_actor_label_is_rejected_in_both_channels(self):
+        block = self._timeline("x" * (pv.MAX_LABEL + 1))
+        with self.assertRaises(pv.SpecError):
+            pv.render_timeline(block["spec"], set(), "t")
+        with self.assertRaises(pv.SpecError):
+            pv.ascii_figure(block)
 
 
 class TestAscii(unittest.TestCase):

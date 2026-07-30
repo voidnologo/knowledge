@@ -4,40 +4,40 @@
 
 **Project:** primer — adaptive Primer-style learning system. Class/instance: public core (engine) + private per-user data repo (profile + lessons).
 
-## Last session (3) — Cold review + implementation (Proposal 0001 Waves A & B)
+**Engine:** v0.5.2. Five test suites under `tools/`, all green.
 
-- **Session 2** (review): fresh-eyes audit + two web research sweeps → durable research artifacts in
-  `docs/engineering/research/` and `docs/engineering/proposals/0001-…md` (findings C1–C4, T1–T7, E1–E4 + plan).
-- **Session 3** (implement): shipped Wave A (C4 effect-size correction, C3 canon edition tags, C1
-  de-personalize the public engine), Wave B (C2 forgetting-aware confidence decay, T1 review→calibration
-  external anchor, E1 review-score recording, T7 "just show me" escape hatch), and Wave C (T2 prompt-quality
-  bar, T5 resume-path reconcile, T6 README privacy hardening, T4 evidence-triggered recalibration). Also added
-  a "What's a Primer?" framing section to the README. Decisions D-0014–D-0017. Branch
-  `proposal-0001-review-and-fixes` (Waves A–C committed).
-- The engine is now learner-agnostic and the feedback loop has an external anchor (cold retrieval feeds
-  confidence both ways; untouched high-confidence markers decay) — closing the closed-self-assessment drift.
+## Last session (4) — first live end-to-end run
 
-Then a design conversation (still Session 3) added two goals and an architecture proposal:
-- **D-0018** self-contained (no required external tools; scripts + local SQLite are in-scope; deterministic
-  bookkeeping is code, not in-context LLM work). **D-0019 / Goal 5** cultivate better learning *habits*, not
-  just content. Anchor reworked onto the lesson flow (Elicit-step recall); `/primer review` is now optional +
-  habit-building. T3 resolved into self-contained in-repo scheduling (not Anki).
-- **Proposal 0002** written *and decided & built* (D-0020): markdown stays source of truth (no SQLite —
-  binary-in-git breaks cross-machine sync), SM-2 scheduler, Python stdlib. Built `tools/primer_state.py`
-  (review scheduling, marker decay, recalibrate-check) + 19 passing tests + `tools/README.md`; wired into
-  SKILL.md / feedback-protocol.md / review-queue template. E3 (generation effect) also shipped.
+Sessions 2–3 reviewed and built. Session 4 was the first time any of it ran in front of a learner. A real lesson was taught (`backend-engineering / async-event-loop`, resumed from its `.STATE.md` sidecar, artifact written, sidecar removed) and the engine was observed doing it, with observations logged continuously rather than recalled at the end. Full record in `sessions/session-4-notes.md`; 15 findings, ranked, in `pending-tasks.md`.
+
+**Validated:** the `!` injection notice (silent, as designed); M1's on-demand load table (read at the named points, with a note on which files are most tempting to skip and why); the research pass end to end (ledger asked first, sweep in a subagent, 20 verdicts recorded including 4 rejects, floor accreted from empty); `render`'s six checks and the `file://` handoff; state updates through the tooling rather than by hand; the examiner's separation, which produced a **better-argued verdict than the Primer's** and was applied over it.
+
+The research pass earned its keep concretely: a source cited in the pre-built lesson body (`www.uvicorn.org`) no longer resolves, the `--workers` claim was attributed to a page that never discusses `--workers`, and the flat GIL claim needed a build-conditional qualifier after PEP 779. Four corrections to material already marked verified six weeks earlier.
+
+**The three findings that matter most:**
+
+- **The faded-figure guarantee does not hold** (F-06). A blanked `timeline` span renders at true geometry in both channels, so position answers the prediction while the label shows `?` — and `render` reports `faded-reveal integrity: passed`, because that check verifies the reveal *text* is DOM-gated. 97 passing tests were consistent with a validated page that hands over the answer. → **D-0029**.
+- **The Deepen figure beat gets skipped entirely** (F-15). The learner raised this twice, unprompted: the staircase diagram arrived at evaluation time instead of while he was deriving it, and *"that was the whole point of adding the drawing tools."* The cause is not forgetfulness — the spec did not exist at the moment it was needed, because prose is faster than authoring a spec mid-conversation and reads as adequate. The visual layer's first live outing did not deliver its value despite working correctly. F-06 and F-15 compound: the beat that was skipped is also the beat that was broken.
+- **The evidence model has no defence against a client that completes the learner's turn** (F-07). Prompt-suggestion ghost text pre-filled a complete correct answer to a probe, so every probe that session is void as evidence. Two recorded remediations have now failed to land — the 2026-06-16 one was never written to any file, and this session's was written and had no effect. The calibration log asserted a fix that did not exist, which is worse than the unfixed bug.
 
 ## Next up
 
-- **Run a real `/primer init`** intake against the de-personalized engine, writing into the new state layer —
-  the first true end-to-end exercise. Verify `init-instance.sh` seeds the new `review-queue.md` format.
-- E2/E4 still deferred until post-use data; remaining habit-formation surface grows with use.
-- Branch `proposal-0001-review-and-fixes` (pushed); **not yet merged to `main`** — rebase first, `origin/main`
-  advanced to `1188833` while we worked.
+1. **The figure subsystem — F-06, F-15, F-14, renderer parity.** Highest value: the faded beat is load-bearing pedagogy and it currently neither fires at the right time nor conceals what it should. Fix them together — F-15 alone produces a spoiled prediction beat instead of a missing one. Check `curve` and `quorum` for the same blanking hole. Give `ascii` a validation pass: it reaches the learner live and is the only channel with no gate.
+2. **F-07** — assert the ghost-text setting at session start instead of trusting a log entry, and make the calibration log unable to record an unverified fix as resolved.
+3. **F-01 / F-02 / F-13** — the Class A parser-vs-template items. All small, all mechanical.
+4. **F-03 / F-08** — the adoption-path items (`sources-import` backfill; a re-calibration beat on resume). Both break exactly once per existing instance, which is why tests never see them.
+5. **F-04 / F-05** — vocabulary and voice. The learner rejected two engine-authored phrasings within two turns, and `profile.md` attributes a word to him ("invariant") that he does not hold.
+6. **Sycophancy baseline** — still unrun, and Session 4 argues it can't come from live lessons: sycophancy went untested because the learner never pushed back on a correct claim.
+
+Unbuilt from Proposal 0003: **M2** (FSRS-6), **M3** (grounded prompt exemplars), **Wave D**. Known-open: the self-updater can't install itself (first adoption needs one manual `git pull`; belongs in the README).
 
 ## Don't re-litigate
 
-`DECISIONS.md` D-0001…D-0019 are settled (privacy via repo split, one-probe intake, three-timescale feedback,
-currency floor, `primer` naming, symlink-determines-command, no-hardcoded-learner, external-anchor+decay,
-~0.4–0.7σ target, evidence-triggered recalibration, self-contained/bookkeeping-as-code, cultivate-learning
-Goal 5). Touch them only with new evidence.
+`DECISIONS.md` D-0001…D-0029 are settled. Recent ones worth knowing before touching adjacent code: **D-0022** (progressive disclosure / on-demand load table), **D-0023/D-0024** (visual layer; specs not SVG; contracted explorables), **D-0025** (promotion writes to the learner's ledger, never to the public core's canon), **D-0027** (examiner never sees the proposed delta; disagreement holds rather than resolves), **D-0028** (third examiner outcome for magnitude divergence; `med` decays), **D-0029** (guarantees stated in prose get tests written from the prose). Touch them only with new evidence.
+
+**Class-level lessons that keep recurring** — read before adding machinery:
+
+- Session 3: 56 passing tests were consistent with six exploitable holes, because nothing adversarial was tested.
+- Session 4: 97 passing tests were consistent with a documented guarantee not being provided, because the tests were written from the code. Where one spec has two renderers, the unvalidated one drifts — and it's the one with the tighter feedback loop.
+- Session 4: a capability can be correct, documented, and never invoked, because the protocol describes it in a reference file instead of a numbered step and the cheaper alternative reads as adequate (F-15).
+- Both sessions: new machinery assumes a greenfield instance, and the gap only shows at adoption.

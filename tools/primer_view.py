@@ -582,6 +582,47 @@ def _curve_cut(spec: dict[str, Any], xa: dict[str, Any],
     return cut
 
 
+def timeline_bounds(spec: dict[str, Any], blanks: set[str], fig: str) -> tuple[float, float]:
+    """The timeline's axis range, and the check that the axis doesn't answer the blank.
+
+    A span's claim lives in its *position*, so blanking one asks "where does this sit?".
+    A derived axis is exactly the hull of every span, which always constrains the answer —
+    at the limit, a blanked span on a two-second axis has nowhere to sit but on top of the
+    other one, which is the whole prediction. So a blanked timeline requires an explicit
+    axis wide enough to admit the wrong answer too.
+    """
+    explicit = spec.get("axis")
+    if explicit is not None:
+        if not isinstance(explicit, dict):
+            raise SpecError(f"timeline '{fig}': 'axis' must be an object with min/max")
+        lo = num(explicit, "min", None, "axis", fig)
+        hi = num(explicit, "max", None, "axis", fig)
+        if hi <= lo:
+            raise SpecError(f"timeline '{fig}': axis has max <= min")
+        spans = obj_list(spec, "spans", "timeline", fig)
+        for s in spans:
+            s0 = num(s, "start", None, "span", fig)
+            s1 = num(s, "end", None, "span", fig)
+            if min(s0, s1) < lo or max(s0, s1) > hi:
+                raise SpecError(
+                    f"timeline '{fig}': span '{s.get('id', s.get('label'))}' runs "
+                    f"{min(s0, s1):g}–{max(s0, s1):g}, outside the declared axis "
+                    f"{lo:g}–{hi:g}. Widen the axis or fix the span.")
+        return lo, hi
+
+    spans = obj_list(spec, "spans", "timeline", fig)
+    if blanks:
+        raise SpecError(
+            f"timeline '{fig}': blanking a span requires an explicit "
+            f"\"axis\": {{\"min\": …, \"max\": …}}. Without one the axis is derived from the "
+            f"spans themselves, so it is exactly wide enough for the true answer and the "
+            f"learner can read the blanked span's position off the axis bounds. Declare an "
+            f"axis with room for the answer you want them to be able to get wrong.")
+    lo = min(num(s, "start", None, "span", fig) for s in spans)
+    hi = max(num(s, "end", None, "span", fig) for s in spans)
+    return lo, hi
+
+
 def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     actors = obj_list(spec, "actors", "timeline", fig)
     spans = obj_list(spec, "spans", "timeline", fig)
@@ -589,8 +630,7 @@ def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     row, pw = 46.0, 380.0
     height = mt + len(actors) * row + 48
     width = ml + pw + mr
-    lo = min(num(s, "start", None, "span", fig) for s in spans)
-    hi = max(num(s, "end", None, "span", fig) for s in spans)
+    lo, hi = timeline_bounds(spec, blanks, fig)
     span = (hi - lo) or 1.0
 
     def rowy(aid: Any) -> float:
@@ -607,12 +647,24 @@ def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
                         "pv-sm", "end"))
         out.append(line(ml, y + row / 2, ml + pw, y + row / 2, "pv-lifeline"))
 
+    # Unresolved bands first, so a visible span on the same row draws on top of one.
     for s in spans:
+        if s.get("id") not in blanks:
+            continue
+        # Budget-check the hidden label too, so unblanking later can't start failing.
+        _label_text(s, blanks, "span", fig)
+        y = rowy(req_key(s, "actor", "timeline", fig)) + row / 2 - 12
+        out.append(f'<rect class="pv-blank-region" x="{ml:g}" y="{y:g}" '
+                   f'width="{pw:g}" height="24" rx="4"/>')
+        out.append(text(ml + pw / 2, y + 17, QMARK, "pv-qmark-inline"))
+
+    for s in spans:
+        if s.get("id") in blanks:
+            continue
         y = rowy(req_key(s, "actor", "timeline", fig)) + row / 2 - 12
         x1 = ml + (num(s, "start", None, "span", fig) - lo) / span * pw
         x2 = ml + (num(s, "end", None, "span", fig) - lo) / span * pw
-        cls = "pv-blank" if s.get("id") in blanks else ""
-        out.append(f'<rect class="pv-span {cls}" x="{min(x1, x2):g}" y="{y:g}" '
+        out.append(f'<rect class="pv-span" x="{min(x1, x2):g}" y="{y:g}" '
                    f'width="{max(abs(x2 - x1), 3):g}" height="24" rx="4"/>')
         out.append(text((x1 + x2) / 2, y + 17, _label_text(s, blanks, "span", fig), "pv-sm"))
 
@@ -912,14 +964,14 @@ def ascii_figure(block: dict[str, Any]) -> str:
     if renderer is None:
         return (f"[{kind} figures render on the view page only — "
                 f"caption: {block.get('caption', '')}]")
-    return renderer(block.get("spec", {}), blanks)
+    return renderer(block.get("spec", {}), blanks, fig)
 
 
 def _label(item: dict[str, Any], blanks: set[str]) -> str:
     return QMARK if item.get("id") in blanks else str(item.get("label", ""))
 
 
-def _ascii_sequence(spec: dict[str, Any], blanks: set[str]) -> str:
+def _ascii_sequence(spec: dict[str, Any], blanks: set[str], fig: str = "<ascii>") -> str:
     labels = {p["id"]: p.get("label", p["id"]) for p in spec.get("participants", [])}
     rows = ["  " + "   ".join(labels.values()), ""]
     for m in spec.get("messages", []):
@@ -932,7 +984,7 @@ def _ascii_sequence(spec: dict[str, Any], blanks: set[str]) -> str:
     return "\n".join(rows)
 
 
-def _ascii_layers(spec: dict[str, Any], blanks: set[str]) -> str:
+def _ascii_layers(spec: dict[str, Any], blanks: set[str], fig: str = "<ascii>") -> str:
     after = spec.get("boundary_after")
     boundary = QMARK if "boundary" in blanks else spec.get("boundary_label", "boundary")
     rows: list[str] = []
@@ -950,7 +1002,7 @@ def _ascii_layers(spec: dict[str, Any], blanks: set[str]) -> str:
     return "\n".join(rows)
 
 
-def _ascii_quorum(spec: dict[str, Any], blanks: set[str]) -> str:
+def _ascii_quorum(spec: dict[str, Any], blanks: set[str], fig: str = "<ascii>") -> str:
     labels = {n["id"]: n.get("label", n["id"]) for n in spec.get("nodes", [])}
     groups = [" ".join(f"({labels.get(n, n)})" for n in g)
               for g in spec.get("partition", [])]
@@ -962,33 +1014,58 @@ def _ascii_quorum(spec: dict[str, Any], blanks: set[str]) -> str:
 
 
 BAR_W = 40
+# The gutter is sized to the actual labels, never to a fixed width that clips them. It used
+# to be a hard 14, so the terminal silently truncated labels the page rendered in full —
+# and "requests 81-100" cut to "requests 81-10" reads as a different, wrong range rather
+# than as truncation. MAX_LABEL is the ceiling because labels are budget-checked first.
+GUTTER_W = MAX_LABEL
 
 
-def _ascii_timeline(spec: dict[str, Any], blanks: set[str]) -> str:
+def _ascii_timeline(spec: dict[str, Any], blanks: set[str], fig: str = "<ascii>") -> str:
     spans = spec.get("spans", [])
     if not spans:
         return ""
-    lo = min(float(s["start"]) for s in spans)
-    hi = max(float(s["end"]) for s in spans)
+    # Same bounds rule as the page, including the explicit-axis requirement when blanked:
+    # the two channels have to agree about what a blank conceals, or the terminal spoils
+    # the page it is supposed to mirror.
+    lo, hi = timeline_bounds(spec, blanks, fig)
     scale = (hi - lo) or 1.0
-    rows = [_timeline_row(a, spans, lo, scale, blanks) for a in spec.get("actors", [])]
+    actors = spec.get("actors", [])
+    names = [_plain_label(a.get("label", a.get("id", "?")), "actor", fig) for a in actors]
+    gw = min(max((len(n) for n in names), default=0), GUTTER_W)
+    rows = [_timeline_row(a, spans, lo, scale, blanks, gw, n)
+            for a, n in zip(actors, names)]
     axis = f"{lo:g}".ljust(BAR_W - len(f"{hi:g}")) + f"{hi:g}"
-    rows.append(f"  {'':>14} └{axis} {spec.get('unit', '')}".rstrip())
+    rows.append(f"  {'':>{gw}} └{axis} {spec.get('unit', '')}".rstrip())
     return "\n".join(rows)
 
 
 def _timeline_row(actor: dict[str, Any], spans: list[dict[str, Any]], lo: float,
-                  scale: float, blanks: set[str]) -> str:
+                  scale: float, blanks: set[str], gw: int, name: str) -> str:
+    """One actor's row. A blanked span contributes no position, only an unresolved field.
+
+    Visible spans are drawn at their true offsets; if any span on this row is blanked, every
+    cell not claimed by a visible span becomes `░` — the blanked span is somewhere in there
+    and the learner cannot read which cells from the drawing.
+    """
+    mine = [s for s in spans if s["actor"] == actor["id"]]
     bar = [" "] * BAR_W
     labels: list[str] = []
-    for s in (s for s in spans if s["actor"] == actor["id"]):
+    has_blank = False
+    for s in mine:
+        if s.get("id") in blanks:
+            has_blank = True
+            labels.append(QMARK)
+            continue
         i1 = int((float(s["start"]) - lo) / scale * (BAR_W - 1))
         i2 = max(int((float(s["end"]) - lo) / scale * (BAR_W - 1)), i1 + 1)
         for i in range(i1, min(i2 + 1, BAR_W)):
             bar[i] = "█"
         labels.append(_label(s, blanks))
-    name = str(actor.get("label", actor["id"]))[:14]
-    return f"  {name:>14} │{''.join(bar)}│ {', '.join(l for l in labels if l)}".rstrip()
+    if has_blank:
+        bar = ["░" if c == " " else c for c in bar]
+    return (f"  {name:>{gw}} │{''.join(bar)}│ "
+            f"{', '.join(l for l in labels if l)}").rstrip()
 
 
 # ---------------------------------------------------------------------------
@@ -1035,6 +1112,8 @@ font-weight:600}
 .pv-t{fill:var(--fg);font:13px ui-sans-serif,system-ui,sans-serif}
 .pv-sm{font-size:11.5px;fill:var(--mut)}
 .pv-qmark{font-size:30px;font-weight:700;fill:var(--acc)}
+/* Same role as .pv-qmark, sized to sit inside a 24px span band without overflowing it. */
+.pv-qmark-inline{font-size:15px;font-weight:700;fill:var(--acc)}
 .pv-l{stroke:var(--fg);stroke-width:1.5}
 .pv-head{fill:var(--fg)}
 .pv-lifeline{stroke:var(--line);stroke-dasharray:3 4}

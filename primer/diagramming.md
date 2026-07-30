@@ -65,6 +65,21 @@ So: blank the element that carries the invariant, ask the learner to fill it, th
 
 - Blank **the causal step**, not a cosmetic detail. In a sequence, blank the message whose absence breaks safety. In a `curve`, blank the region past the knee. In a `state` diagram, blank the transition the design forbids.
 - Blank **exactly one thing** (occasionally two if they're the same claim). Blanking three turns a prediction into a guessing game.
+
+**What blanking conceals depends on where the claim lives, and the two are not the same thing.** A blanked element's *label* is the obvious channel; for some forms the claim is carried by the drawing instead, and hiding the label there leaves the answer in plain sight. So each form defines what a blank actually removes:
+
+| Form | Blanking | What it conceals |
+|---|---|---|
+| `sequence` | a message or note id | its **label**. The arrow, its direction, and its place in the order stay — you are asking *what this message is*, not whether one exists. |
+| `state` | a transition or illegal-transition id | its **label**. The arc and its endpoints stay — you are asking *why this transition exists or is forbidden*. |
+| `layers` | `"boundary"` | the boundary's **label**. Its position stays; if *where the boundary sits* is your claim, this form cannot blank it — restructure or ask in prose. |
+| `quorum` | `"progress"` | which side is shaded **and** the "can make progress" caption — the whole claim, since the claim is the side. |
+| `curve` | `"tail"` | the plotted **region** past the knee: the series is cut there and the area is drawn as unresolved. Position is the claim, so position is what goes. |
+| `timeline` | a span id | the span's **position and extent**. The row renders as an unresolved field across the declared axis; the true offsets are never emitted. Requires a declared `axis` (see the `timeline` payload below). |
+
+If you find yourself wanting to blank something the table says is not concealable, that is a signal the figure is the wrong form for the claim — not a signal to blank the nearest label and hope.
+
+**Both channels conceal identically, and that is a tested property**, not a convention: the terminal cannot spoil the page and the page cannot spoil the terminal. The regression that motivated writing it down is worth knowing, because it passed every check at the time — a blanked `timeline` span rendered its bar at true coordinates with a `?` where its label had been, so the learner read the answer off the geometry while `render` reported `faded-reveal integrity: passed`. That check verifies the reveal *text* is gated; it says nothing about a drawing that answers its own prediction. (D-0029.)
 - **The caption must not answer the blank.** Nothing can check this for you — the caption is the one string shown above a blanked figure, so it is the remaining spoiler channel. "Leader isolated in a minority partition" is fine above a blanked ack; "Request path and trust boundary" is not fine above a blanked boundary label. Describe what the figure *is*, not what it *shows*.
 - Ask for a *specific* prediction: "what message has to happen here for the commit to be safe?" beats "what goes here?".
 - The `reveal` text is the answer *plus why* — one or two sentences. It is what the learner checks their prediction against, so it has to be falsifiable, not a restatement.
@@ -187,13 +202,16 @@ Provide 5–9 points; they render as a polyline (no smoothing), so put points wh
 ```json
 {
   "actors": [{"id": "req", "label": "request"}, {"id": "gc", "label": "GC pause"}],
-  "spans": [{"actor": "req", "start": 0, "end": 40, "label": "p50 path"},
-            {"actor": "gc", "start": 25, "end": 70, "label": "stop-the-world"}],
+  "spans": [{"id": "s-req", "actor": "req", "start": 0, "end": 40, "label": "p50 path"},
+            {"id": "s-gc", "actor": "gc", "start": 25, "end": 70, "label": "stop-the-world"}],
+  "axis": {"min": 0, "max": 120},
   "unit": "ms"
 }
 ```
 
 Overlap is the point. If nothing overlaps, this should have been a `sequence`.
+
+`axis` is optional and **required whenever a span is blanked**. Without it the axis is derived as exactly the hull of the spans — which is precisely wide enough for the true answer and no wider, so the bounds hand over the position you were asking the learner to predict. At the limit it is total: a blanked span on a 0–2000 axis has nowhere to sit but on top of the other one, which *is* the prediction. Declare a range with room for the wrong answer as well as the right one, and the generator will reject a span that falls outside it.
 
 ## Explorables — spec format and the interaction contract
 
