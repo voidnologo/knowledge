@@ -43,6 +43,10 @@ The `primer/*` files are the **engine** — they ship with the public core. Only
 
 Read only what the verb needs. `index` and `profile` need none of them.
 
+**Update notice.** The line below is a dynamic-context injection: the command runs before this skill's content reaches you, and its output replaces the placeholder. It prints one line when a newer engine is waiting and **nothing** otherwise — including when it can't tell (offline, or a fork with no upstream), because a learner should never see an error here. The check is cached to at most one network call a day. If a notice appears, surface it once, briefly, and carry on with the verb the learner asked for; don't derail a lesson into an upgrade.
+
+!`python3 "${CLAUDE_SKILL_DIR}/tools/primer_update.py" check --quiet 2>/dev/null || true`
+
 Learner state is **instance data** — it lives in the learner's private data repo, not the core, and is read at runtime from the resolved data dir (see *Resolve the data dir* in `<process>`). It is **not** statically included here.
 </execution_context>
 
@@ -112,6 +116,20 @@ For each prompt, grade the learner's recall and let the scheduler reschedule it:
 ## `/primer resume` — Continue an in-progress lesson
 
 Look for in-progress state at `$DATA_DIR/lessons/<domain>/<YYYY-MM-DD>-<slug>.STATE.md` — a sidecar next to where the finished artifact will land (`primer/lesson-template.md`). If one exists, ask if it should be resumed. Otherwise surface the most recent unfinished lesson. On completion, the `.STATE.md` sidecar is removed and the `<YYYY-MM-DD>-<slug>.md` artifact remains.
+
+## `/primer update` — Get the latest engine, and migrate the instance
+
+One verb, both halves. The learner should never need to know what a fast-forward pull is, and a core update alone can leave their instance broken — an engine release that adds a state file (the source ledger did) makes every older instance error out until the file exists.
+
+```bash
+python3 ${CLAUDE_SKILL_DIR}/tools/primer_update.py apply
+```
+
+Report what changed in plain language: the version before and after, and each migration line. Then, if the engine changed, say that new skill text loads within the current session (Claude Code watches skill directories) but a running lesson keeps the protocol it started with, so finishing the lesson first is fine.
+
+When it refuses, it refuses for a reason and the message says what to do — uncommitted changes in the core checkout, diverged local commits, no git, or a core that isn't a checkout at all. **Do not work around it by force-pulling or resetting**: those are someone's unpushed contributions or a hand-modified engine, and the learner's data is not what's at risk. Relay the message and let them choose.
+
+Related: `… primer_update.py status` (versions, paths, what the instance is missing), `… migrate` (instance only), `… check --force` (ignore the daily cache).
 
 ## `/primer view [lesson]` — Open a lesson's visual page
 

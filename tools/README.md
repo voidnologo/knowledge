@@ -12,6 +12,8 @@ Helper scripts for primer. All are self-contained (no third-party installs).
 | `test_primer_view.py` | Unit tests for `primer_view.py`. Run: `python3 tools/test_primer_view.py`. |
 | `primer_sources.py` | **The source ledger** — what has been vetted, what has gone stale, what still needs grounding. Makes the mandatory discovery pass cheaper the more it runs. |
 | `test_primer_sources.py` | Unit tests for `primer_sources.py`. Run: `python3 tools/test_primer_sources.py`. |
+| `primer_update.py` | **Self-update** — check for a newer engine, fast-forward it, and migrate the learner's instance (add state files a newer engine expects). |
+| `test_primer_update.py` | Unit tests for `primer_update.py`. Run: `python3 tools/test_primer_update.py`. |
 
 ## `primer_state.py`
 
