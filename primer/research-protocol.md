@@ -54,7 +54,7 @@ Two rules that matter more than the queries:
 
 For each candidate, in order. Stop at the first line that fires.
 
-1. **Already in the ledger?** `sources-check --url <u>`. If the verdict is `dropped`, don't re-litigate it. If it's `cite`/`caveat` and fresh, reuse it — that's the saving. If it's stale, re-validate now and re-add (which refreshes `checked`).
+1. **Already in the ledger?** `sources-check --url <u>`. If the verdict is `dropped`, don't re-litigate it. If it's `cite`/`caveat` and fresh, reuse it — that's the saving — and **still `sources-add` it**, which is one call that refreshes `checked` and records the reliance. Skipping that is what would make `used` count recordings instead of lessons, and `sources-stale`'s "most-used first" ordering rests on it. If it's stale, re-validate now and re-add (which refreshes `checked`).
 2. **Fails a stale-criterion?** (`primer/source-canon.md` — predates a known consensus shift, has a maintained successor, teaches a pattern the field cooled on, or makes version claims that can't be grounded.) → verdict **`dropped`**, recorded with the reason so the next lesson doesn't spend time on it again.
 3. **Load-bearing for this lesson, and grounded?** → verdict **`cite`**, tag `verified` if it was actually fetched and read this session.
 4. **Usable but limited?** (right on the concept, dated on specifics; vendor-authored; a single case study generalized too far) → verdict **`caveat`**, and *state the limitation in the lesson* — an unstated caveat is the same as no caveat.
@@ -109,4 +109,4 @@ sources_consulted:
     grounds: "the 2026 default is distroless"                   # outstanding — verify
 ```
 
-`grounds` is what makes `sources-unverified` actionable: it names the claim still resting on training data, so a later session can close it instead of rediscovering that something needs closing.
+The ledger tracks the URL and the verdict; the claim-to-source mapping lives here, in the artifact. So `sources-unverified` gives you the outstanding *sources* and the artifacts' `grounds` lines tell you which *claims* each one is holding up — that pairing is what makes the backlog closable instead of a list of links with no idea what depends on them.

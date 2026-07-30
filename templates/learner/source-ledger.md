@@ -14,7 +14,9 @@ Source line format (under `## Sources`):
 - `verdict` — `cite` (load-bearing, use it), `caveat` (usable with a stated limitation), `dropped` (failed the stale-criteria; recorded so it isn't re-judged).
 - `checked` — last time the entry was actually re-validated. Freshness is measured from here (`sources-stale`), not from `seen`.
 - `floor` — `yes` marks a source that proved load-bearing and should be part of the domain's starting set for future lessons (`sources-floor`). This is what "promotion" means now.
-- `used` — how many lessons leaned on it. A high count with a stale `checked` is the first thing to re-verify.
+- `used` — how many lessons leaned on it (the discovery pass re-adds on reuse, which is what keeps this honest). A high count with a stale `checked` is the first thing to re-verify.
+
+**Hand-editing is fine — but every field is required and validated.** A typo'd key, a `floor:Yes`, an unknown verdict, or a non-integer `used` is refused with the line number rather than silently defaulted: a permissive parse would rewrite the file on the next write and quietly erase a promotion or launder an ungrounded source into a verified one. Values may not contain `|`, a line break of any kind, or control characters — the ledger is one entry per line, and a break forges a second entry.
 
 ---
 

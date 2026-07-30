@@ -22,7 +22,6 @@ Stdlib only — runs on any Python 3.11+ (mac/linux/windows) with nothing to ins
 from __future__ import annotations
 
 import argparse
-import re
 from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
@@ -37,13 +36,24 @@ SWEEP_FRESH_DAYS = 60
 TAGS = ("verified", "from-training")
 VERDICTS = ("cite", "caveat", "dropped")
 
-# Fields are pipe-delimited (matching review-queue.md), so a pipe or a newline inside a
-# value would silently corrupt the line — and these values come from web pages and model
-# output. Rejected loudly rather than escaped: an unparseable ledger is worse than a
-# rejected add, and the caller can always rephrase a `why`.
-FORBIDDEN = ("|", "\n", "\r")
+# Fields are pipe-delimited (matching review-queue.md), so a pipe or a line break inside a
+# value silently corrupts the line — and these values come from web pages and model output.
+# Rejected loudly rather than escaped: an unparseable ledger is worse than a rejected add,
+# and the caller can always rephrase a `why`.
+#
+# Enumerating bad characters does not work here. `str.splitlines()` — which is how the
+# ledger is read — breaks on **eleven** code points, not two, so `\x0b \x0c \x1c \x1d \x1e
+# \x85    ` all sailed through a `("|", "\n", "\r")` check while still splitting
+# the line on the next read. That was a proven entry-forgery vector: a separator inside a
+# `--why` value wrote one line and the next read saw two, with the forged entry inheriting
+# the honest record's tail (fresh `checked`, `floor:yes`, `verdict:cite`). So the rule is
+# inverted: a value must survive a splitlines() round trip and carry no control characters.
 MAX_FIELD = 400
-# A ledger entry is something the learner may click. Only web and local schemes.
+# URLs are legitimately long (doc anchors, archive links); prose fields are not.
+MAX_URL = 2000
+# A ledger entry is something the learner may click. Only web and local schemes — enforced
+# on read as well as write, because a hand-edited or already-corrupted file reaches the
+# same place and `javascript:` in a `sources_consulted` list is not acceptable.
 ALLOWED_SCHEMES = ("http://", "https://", "file://")
 
 SOURCES_HEADING = "## Sources"
@@ -109,79 +119,174 @@ def _date(value: str, what: str) -> date:
         raise LedgerError(f"{what} is not a YYYY-MM-DD date: {value!r}") from None
 
 
-def parse_source(line: str) -> Source | None:
-    """Parse one ledger line. Returns None for anything that isn't one (prose, headings)."""
-    if not line.lstrip().startswith("- url:"):
+SOURCE_KEYS = {"url", "domain", "tag", "verdict", "seen", "checked", "floor", "used", "why"}
+SWEEP_KEYS = {"domain", "swept", "note"}
+
+
+def parse_source(line: str, where: str = "") -> Source | None:
+    """Parse one ledger line. Returns None for anything that isn't one (prose, headings).
+
+    Every field is **required**, and a wrong key or value is an error rather than a
+    default. Permissive defaults were actively harmful: `floor:Yes` parsed as False and
+    the next write rewrote it to `floor:no`, silently erasing a promotion; a `tags:` typo
+    parsed as `tag=verified`, laundering an ungrounded source into a verified one and
+    dropping it from the verify backlog forever. The file is advertised as hand-editable,
+    so a case slip must fail loudly, not rewrite the learner's model.
+    """
+    if not _is_source_line(line):
         return None
     f = _fields(line)
-    # `url:` splits on the first colon, so the scheme's own colon lands in the value.
-    url = f.get("url", "")
-    if url and not url.startswith(ALLOWED_SCHEMES):
-        url = _reattach_scheme(line)
+    _require_keys(f, SOURCE_KEYS, "source", where)
+    seen = _date(f["seen"], f"seen{where}")
+    checked = _date(f["checked"], f"checked{where}")
+    _check_order(seen, checked, where)
     return Source(
-        url=url, domain=f.get("domain", ""), tag=f.get("tag", "verified"),
-        verdict=f.get("verdict", "cite"),
-        seen=_date(f.get("seen", "1970-01-01"), "seen"),
-        checked=_date(f.get("checked", f.get("seen", "1970-01-01")), "checked"),
-        floor=f.get("floor", "no") == "yes", used=int(f.get("used", "0") or 0),
-        why=f.get("why", ""))
+        url=clean_url(f["url"]), domain=clean(f["domain"], f"domain{where}"),
+        tag=one_of(f["tag"], TAGS, f"tag{where}"),
+        verdict=one_of(f["verdict"], VERDICTS, f"verdict{where}"),
+        seen=seen, checked=checked, floor=_flag(f["floor"], where),
+        used=_count(f["used"], where), why=clean(f["why"], f"why{where}"))
 
 
-def _reattach_scheme(line: str) -> str:
-    """Recover a URL whose scheme colon was eaten by the field split."""
-    m = re.search(r"- url:(.*?)(?: \| |$)", line)
-    return m.group(1).strip() if m else ""
+def _require_keys(fields: dict[str, str], expected: set[str], kind: str,
+                  where: str) -> None:
+    missing = sorted(expected - set(fields))
+    unknown = sorted(set(fields) - expected)
+    if missing:
+        raise LedgerError(f"{kind} line{where} is missing field(s) {missing}")
+    if unknown:
+        # Carrying an unknown key silently through a rewrite drops it; dropping a
+        # hand-added annotation without saying so is worse than refusing to write.
+        raise LedgerError(f"{kind} line{where} has unrecognized field(s) {unknown} — "
+                          f"remove them or add support before the next write drops them")
 
 
-def parse_sweep(line: str) -> Sweep | None:
-    if not line.lstrip().startswith("- domain:"):
+def _flag(value: str, where: str) -> bool:
+    if value.lower() not in ("yes", "no"):
+        raise LedgerError(f"floor{where} must be 'yes' or 'no'; got {value!r}")
+    return value.lower() == "yes"
+
+
+def _count(value: str, where: str) -> int:
+    # `isdigit()` alone is True for Arabic-Indic and other non-ASCII digits, and `int()`
+    # refuses strings over 4300 digits — both surfaced as tracebacks rather than errors.
+    if not (value.isascii() and value.isdigit()) or len(value) > 9:
+        raise LedgerError(f"used{where} must be a plain non-negative integer (max 9 "
+                          f"digits); got {value!r}")
+    return int(value)
+
+
+def _check_order(seen: date, checked: date, where: str) -> None:
+    if checked < seen:
+        raise LedgerError(f"line{where}: checked ({checked}) is before seen ({seen})")
+
+
+def _check_not_future(when: date, what: str, today: date) -> date:
+    """A future date makes an entry permanently fresh — it silently switches off the
+    freshness guardrail for that source, which is what this module exists to enforce."""
+    if when > today:
+        raise LedgerError(f"{what} is in the future ({when}); today is {today}")
+    return when
+
+
+def parse_sweep(line: str, where: str = "") -> Sweep | None:
+    if not _is_sweep_line(line):
         return None
     f = _fields(line)
-    return Sweep(domain=f.get("domain", ""), swept=_date(f.get("swept", "1970-01-01"),
-                                                         "swept"), note=f.get("note", ""))
+    _require_keys(f, SWEEP_KEYS, "sweep", where)
+    return Sweep(domain=clean(f["domain"], f"domain{where}"),
+                 swept=_date(f["swept"], f"swept{where}"),
+                 note=clean(f["note"], f"note{where}"))
 
 
 def _section_bounds(lines: list[str], heading: str) -> tuple[int, int]:
     """Index range of a section's body: (first line after the heading, end exclusive)."""
-    try:
-        start = next(i for i, l in enumerate(lines) if l.strip() == heading) + 1
-    except StopIteration:
+    matches = [i for i, line in enumerate(lines) if line.strip() == heading]
+    if not matches:
         raise LedgerError(f"ledger is missing its '{heading}' section — is this file "
-                          f"scaffolded from templates/learner/source-ledger.md?") from None
+                          f"scaffolded from templates/learner/source-ledger.md?")
+    if len(matches) > 1:
+        # Binding to the first would orphan everything under the second: its prose, its
+        # format docs, and its records, all invisible to every command.
+        raise LedgerError(f"ledger has {len(matches)} '{heading}' headings (lines "
+                          f"{[i + 1 for i in matches]}) — one section must own the data; "
+                          f"merge them before the next write ignores half the file")
+    start = matches[0] + 1
     end = next((i for i in range(start, len(lines))
                 if lines[i].startswith("## ")), len(lines))
     return start, end
 
 
+def _data_lines(lines: list[str], heading: str) -> list[tuple[int, str]]:
+    """A section's data lines with 1-based file line numbers, skipping fenced blocks.
+
+    Fence-aware because the natural way to document the line format is a fenced example,
+    and a doc line lifted out of its fence became a live ledger entry with url='<url>'.
+    """
+    start, end = _section_bounds(lines, heading)
+    out: list[tuple[int, str]] = []
+    fenced = False
+    for i in range(start, end):
+        if _is_fence(lines[i]):
+            fenced = not fenced
+            continue
+        if not fenced:
+            out.append((i + 1, lines[i]))
+    return out
+
+
+def _is_fence(line: str) -> bool:
+    stripped = line.lstrip()
+    return stripped.startswith("```") or stripped.startswith("~~~")
+
+
 def read_sources(lines: list[str]) -> list[Source]:
-    start, end = _section_bounds(lines, SOURCES_HEADING)
-    return [s for s in (parse_source(l) for l in lines[start:end]) if s]
+    return [s for s in (parse_source(text, f" (line {n})")
+                        for n, text in _data_lines(lines, SOURCES_HEADING)) if s]
 
 
 def read_sweeps(lines: list[str]) -> list[Sweep]:
-    start, end = _section_bounds(lines, SWEEPS_HEADING)
-    return [s for s in (parse_sweep(l) for l in lines[start:end]) if s]
+    return [s for s in (parse_sweep(text, f" (line {n})")
+                        for n, text in _data_lines(lines, SWEEPS_HEADING)) if s]
 
 
 # --- Validation ------------------------------------------------------------
 
 
-def clean(value: str, what: str) -> str:
+def clean(value: str, what: str, limit: int = MAX_FIELD) -> str:
     """Reject anything that would corrupt a pipe-delimited line, or is absurdly long."""
     text = (value or "").strip()
     if not text:
         raise LedgerError(f"{what} is required")
-    bad = next((c for c in FORBIDDEN if c in text), None)
-    if bad is not None:
-        raise LedgerError(f"{what} may not contain {bad!r} — the ledger is "
-                          f"pipe-delimited, one entry per line. Rephrase it.")
-    if len(text) > MAX_FIELD:
-        raise LedgerError(f"{what} is {len(text)} chars, over the {MAX_FIELD} limit")
+    _reject_line_breaks(text, what)
+    _reject_control_chars(text, what)
+    if "|" in text:
+        raise LedgerError(f"{what} may not contain '|' — the ledger is pipe-delimited, "
+                          f"one entry per line. Rephrase it.")
+    if len(text) > limit:
+        raise LedgerError(f"{what} is {len(text)} chars, over the {limit} limit")
     return text
 
 
+def _reject_line_breaks(text: str, what: str) -> None:
+    """Anything `splitlines()` would break on, not just \\n and \\r."""
+    if len(text.splitlines()) > 1 or text != "".join(text.splitlines()):
+        raise LedgerError(f"{what} may not contain a line break (including the exotic "
+                          f"ones: vertical tab, form feed, U+2028, U+2029) — one ledger "
+                          f"entry is one line, and a break here forges a second entry")
+
+
+def _reject_control_chars(text: str, what: str) -> None:
+    """Tabs forge output columns; ESC lets a web-sourced value drive the terminal; NUL
+    turns the ledger into a binary blob git can no longer merge."""
+    bad = next((c for c in text if ord(c) < 0x20 or ord(c) == 0x7F), None)
+    if bad is not None:
+        raise LedgerError(f"{what} may not contain control characters (found "
+                          f"{bad!r}) — they corrupt the ledger's display and its diffs")
+
+
 def clean_url(value: str) -> str:
-    url = clean(value, "url")
+    url = clean(value, "url", MAX_URL)
     if not url.startswith(ALLOWED_SCHEMES):
         raise LedgerError(f"url must start with one of {ALLOWED_SCHEMES}; got {url!r}")
     return url
@@ -197,14 +302,19 @@ def one_of(value: str, allowed: tuple[str, ...], what: str) -> str:
 
 
 def upsert_source(sources: list[Source], new: Source) -> tuple[list[Source], str]:
-    """Add, or update the existing entry for the same URL.
+    """Add, or update the existing entry for the same (url, domain).
 
     Re-adding is the common case — the same source turns up in a later lesson — so it
     refreshes `checked`, bumps `used`, and keeps the earliest `seen`. That accrual is the
     whole point: it's what makes a repeat sighting evidence rather than a duplicate.
+
+    Identity is **(url, domain)**, not url alone. A spec or a Jepsen report is legitimately
+    cited from two domains, and URL-only identity meant the second citation overwrote the
+    first record's domain wholesale — silently removing the source from the first domain's
+    accreted floor, which is the one thing the floor exists to remember.
     """
     for i, existing in enumerate(sources):
-        if existing.url != new.url:
+        if (existing.url, existing.domain) != (new.url, new.domain):
             continue
         merged = replace(new, seen=min(existing.seen, new.seen),
                          used=existing.used + 1,
@@ -232,12 +342,14 @@ def _source_key(s: Source) -> tuple[str, str]:
     return (s.domain, s.url)
 
 
+# Unindented only: an indented "- url:" is a nested list item in someone's prose, not a
+# record, and treating it as data both mangles the prose and invents an entry.
 def _is_source_line(line: str) -> bool:
-    return line.lstrip().startswith("- url:")
+    return line.startswith("- url:")
 
 
 def _is_sweep_line(line: str) -> bool:
-    return line.lstrip().startswith("- domain:")
+    return line.startswith("- domain:")
 
 
 def _replace_section(lines: list[str], heading: str, body: list[str],
@@ -249,22 +361,52 @@ def _replace_section(lines: list[str], heading: str, body: list[str],
     Open-Learner-Model file a human reads and hand-edits), so a rewrite must not eat them.
     """
     start, end = _section_bounds(lines, heading)
-    kept = [l for l in lines[start:end]
-            if not is_data(l) and l.strip() != PLACEHOLDER]
-    # Data goes back where the section ends, just above its trailing `---` rule if it has
-    # one, so appended entries don't drift past the separator over successive writes.
-    cut = max((i for i, l in enumerate(kept) if l.strip() == "---"), default=len(kept))
-    before = _trim_trailing_blanks(kept[:cut])
-    after = kept[cut:]
+    body_lines = lines[start:end]
+    # Fence-aware, for the same reason the parser is: the natural way to document the line
+    # format is a fenced example, and treating a doc line as data both lifts it out of its
+    # fence and turns it into a live entry.
+    replaceable = _replaceable_flags(body_lines, is_data)
+    # Where the data currently sits, so a curated section keeps its narrative order
+    # instead of having trailing notes hoisted above the records on every write.
+    anchor = next((i for i, flag in enumerate(replaceable) if flag), None)
+    kept = [line for line, flag in zip(body_lines, replaceable) if not flag]
+    if anchor is not None:
+        cut = sum(1 for flag in replaceable[:anchor] if not flag)
+    else:
+        # No data yet: fall back to just above the section's trailing `---` rule.
+        cut = max((i for i, line in enumerate(kept) if line.strip() == "---"),
+                  default=len(kept))
+    before = _trim_blanks(kept[:cut], trailing=True)
+    after = _trim_blanks(kept[cut:], trailing=False)
     block = ([""] + body + [""]) if body else [""]
     return lines[:start] + before + block + after + lines[end:]
 
 
-def _trim_trailing_blanks(lines: list[str]) -> list[str]:
-    end = len(lines)
-    while end and not lines[end - 1].strip():
-        end -= 1
-    return lines[:end]
+def _replaceable_flags(body: list[str], is_data: Callable[[str], bool]) -> list[bool]:
+    """Per-line: is this a data line (or the placeholder) that a rewrite should replace?"""
+    flags: list[bool] = []
+    fenced = False
+    for line in body:
+        if _is_fence(line):
+            fenced = not fenced
+            flags.append(False)
+            continue
+        flags.append(not fenced and (is_data(line) or line.strip() == PLACEHOLDER))
+    return flags
+
+
+def _trim_blanks(lines: list[str], trailing: bool) -> list[str]:
+    """Strip blank lines from one end, so the inserted block's own spacing is the only
+    spacing and successive writes don't accumulate empty lines."""
+    if trailing:
+        end = len(lines)
+        while end and not lines[end - 1].strip():
+            end -= 1
+        return lines[:end]
+    start = 0
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    return lines[start:]
 
 
 # --- Queries ---------------------------------------------------------------
@@ -310,7 +452,9 @@ def resolve_data_dir(arg: str | None) -> Path:
         for line in cfg.read_text().splitlines():
             if line.startswith("DATA_DIR="):
                 return Path(line.split("=", 1)[1].strip()).expanduser()
-    raise SystemExit("no --data-dir given and no DATA_DIR in ~/.config/primer/config")
+    raise LedgerError("no --data-dir given and no DATA_DIR in "
+                      "~/.config/primer/config — pass --data-dir or run "
+                      "tools/init-instance.sh")
 
 
 def ledger_path(args: argparse.Namespace) -> Path:
@@ -321,22 +465,38 @@ def _read(path: Path) -> list[str]:
     if not path.exists():
         raise LedgerError(f"no ledger at {path} — scaffold it from "
                           f"templates/learner/source-ledger.md (or run init-instance.sh)")
-    return path.read_text().splitlines()
+    try:
+        return path.read_text(encoding="utf-8").splitlines()
+    except UnicodeDecodeError as exc:
+        raise LedgerError(f"{path} is not valid UTF-8 ({exc}) — an editor probably saved "
+                          f"it in a legacy encoding; re-save it as UTF-8") from None
 
 
 def _write(path: Path, lines: list[str]) -> None:
-    path.write_text("\n".join(lines) + "\n")
+    """Write via a temp file and rename.
+
+    Two reasons this is not `write_text`. Explicit utf-8, because the locale default is
+    cp1252 on a stock Windows box and an arrow in a `why` field would raise. And atomicity,
+    because `write_text` opens with 'w' — it *truncates before it encodes*, so a failed
+    write emptied the ledger, which is the only copy of the learner's accreted floor.
+    """
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    tmp.replace(path)
 
 
 def _today(args: argparse.Namespace) -> date:
-    return _date(args.on, "--on") if getattr(args, "on", None) else date.today()
+    if not getattr(args, "on", None):
+        return date.today()
+    when = _date(args.on, "--on")
+    return _check_not_future(when, "--on", date.today())
 
 
 def _show(sources: list[Source], today: date) -> None:
     for s in sources:
         flag = " [floor]" if s.floor else ""
         print(f"{s.domain}\t{s.verdict}\t{s.tag}\tchecked {s.age(today)}d ago\t"
-              f"used {s.used}{flag}\t{s.url}")
+              f"used {s.used}{flag}\t{s.url}\t{s.why}")
 
 
 # --- CLI -------------------------------------------------------------------
@@ -346,9 +506,14 @@ def cmd_add(args: argparse.Namespace) -> int:
     path = ledger_path(args)
     lines = _read(path)
     today = _today(args)
+    verdict = one_of(args.verdict, VERDICTS, "verdict")
+    if args.floor and verdict == "dropped":
+        # Same guard as `sources-promote`: a source that failed the stale-criteria has no
+        # business in the floor a future lesson reads as its starting set.
+        raise LedgerError("--floor with --verdict dropped: a dropped source cannot be "
+                          "part of the floor")
     source = Source(url=clean_url(args.url), domain=clean(args.domain, "domain"),
-                    tag=one_of(args.tag, TAGS, "tag"),
-                    verdict=one_of(args.verdict, VERDICTS, "verdict"),
+                    tag=one_of(args.tag, TAGS, "tag"), verdict=verdict,
                     seen=today, checked=today, floor=args.floor, used=1,
                     why=clean(args.why, "why"))
     sources, action = upsert_source(read_sources(lines), source)
@@ -375,7 +540,7 @@ def cmd_stale(args: argparse.Namespace) -> int:
     today = _today(args)
     found = stale_sources(read_sources(_read(ledger_path(args))), today, args.days)
     if not found:
-        print(f"no sources older than {args.days}d")
+        print(f"no sources at or past the {args.days}d horizon")
         return 0
     print(f"{len(found)} source(s) past the {args.days}d freshness horizon, "
           f"most-used first:")
@@ -503,6 +668,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     except OSError as exc:
         print(f"error: {exc}")
+        return 1
+    except ValueError as exc:
+        # Residual coercion failures from a hand-edited ledger. Reported as a ledger
+        # problem rather than a traceback, since that is what it always is.
+        print(f"error: ledger could not be parsed ({type(exc).__name__}: {exc})")
         return 1
 
 
