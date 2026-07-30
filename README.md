@@ -2,7 +2,7 @@
 
 A personal, Primer-style learning system — an adaptive tutor that runs interactive lessons calibrated to *you* and gets sharper the more you use it.
 
-> **New here?** The [10-minute pitch deck](docs/pitch/primer-pitch.html) walks through the motivation, what it is, and how it works. It's a self-contained HTML deck — clone the repo and open the file in a browser (GitHub won't render it inline), or `docs/pitch/primer-pitch.html?print-pdf` to export a PDF.
+> **New here?** [Launch the 10-minute pitch deck](https://voidnologo.com/primer/pitch/primer-pitch.html) — it walks through the motivation, what it is, and how it works. Add [`?print-pdf`](https://voidnologo.com/primer/pitch/primer-pitch.html?print-pdf) to export a PDF. Source lives at `docs/pitch/primer-pitch.html`.
 
 ## What's a "Primer"?
 
