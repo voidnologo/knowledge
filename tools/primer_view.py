@@ -197,9 +197,13 @@ def opt_obj_list(spec: dict[str, Any], key: str, kind: str,
 
 
 def _typed_list(value: Any, key: str, kind: str, fig: str) -> list[dict[str, Any]]:
-    if not isinstance(value, list) or not all(isinstance(i, dict) for i in value):
+    if not isinstance(value, list):
         raise SpecError(f"{kind} '{fig}': '{key}' must be a list of objects; "
                         f"got {type(value).__name__}")
+    bad = next((i for i in value if not isinstance(i, dict)), None)
+    if bad is not None:
+        raise SpecError(f"{kind} '{fig}': every entry in '{key}' must be an object with "
+                        f"its own fields; found {bad!r}")
     return value
 
 
