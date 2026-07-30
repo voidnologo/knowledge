@@ -65,6 +65,7 @@ So: blank the element that carries the invariant, ask the learner to fill it, th
 
 - Blank **the causal step**, not a cosmetic detail. In a sequence, blank the message whose absence breaks safety. In a `curve`, blank the region past the knee. In a `state` diagram, blank the transition the design forbids.
 - Blank **exactly one thing** (occasionally two if they're the same claim). Blanking three turns a prediction into a guessing game.
+- **The caption must not answer the blank.** Nothing can check this for you — the caption is the one string shown above a blanked figure, so it is the remaining spoiler channel. "Leader isolated in a minority partition" is fine above a blanked ack; "Request path and trust boundary" is not fine above a blanked boundary label. Describe what the figure *is*, not what it *shows*.
 - Ask for a *specific* prediction: "what message has to happen here for the commit to be safe?" beats "what goes here?".
 - The `reveal` text is the answer *plus why* — one or two sentences. It is what the learner checks their prediction against, so it has to be falsifiable, not a restatement.
 
