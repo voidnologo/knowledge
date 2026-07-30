@@ -291,6 +291,16 @@ class TestTemplateFormatsMatchTheParsers(unittest.TestCase):
         self.assertIsNotNone(ps.MARKER_RE.match(concrete),
                              f"documented marker row does not parse: {concrete!r}")
 
+    def test_calibration_log_documents_every_token_the_code_writes(self):
+        # Wave B added HATCH_TYPE to the code and to feedback-protocol.md but not to this
+        # template's miss-type list — the same drift class as the log.md <mode> bug, so it
+        # gets the same kind of test rather than a one-off fix.
+        text = self.template("calibration-log.md")
+        self.assertIn(ps.HATCH_TYPE, text,
+                      "calibration-log.md must document the token hatch-log writes")
+        self.assertIn("examiner-disagree", text,
+                      "calibration-log.md must document the examiner's token")
+
     def test_calibration_log_field_order_matches_the_hatch_parser(self):
         text = self.template("calibration-log.md")
         self.assertIn("<date> | <domain> | <miss-type>", text)
