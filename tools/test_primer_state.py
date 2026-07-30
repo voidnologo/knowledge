@@ -232,5 +232,85 @@ class TestHatchTrend(unittest.TestCase):
 
 
 
+class TestTemplateFormatsMatchTheParsers(unittest.TestCase):
+    """The templates document formats that this module parses. Drift between them breaks
+    the state layer for NEW instances only — the worst place for it, because the
+    maintainer's own instance keeps working and never surfaces the bug.
+
+    This is exactly what happened: templates/learner/log.md documented the second field as
+    `<domain>` while DATED_RE keys on a `<mode>` token, so a fresh instance would have had
+    a recalibrate trigger that silently never fired and an escape-hatch trend with no
+    denominator.
+    """
+
+    TEMPLATES = Path(__file__).resolve().parent.parent / "templates" / "learner"
+
+    def template(self, name: str) -> str:
+        path = self.TEMPLATES / name
+        self.assertTrue(path.exists(), f"missing template {name}")
+        return path.read_text()
+
+    def test_log_documents_a_mode_field_not_a_domain(self):
+        text = self.template("log.md")
+        self.assertIn("<mode>", text)
+        self.assertNotRegex(text, r"Format:.*\| <domain> \|")
+
+    def test_log_names_every_mode_token_the_code_keys_on(self):
+        text = self.template("log.md")
+        # `lesson` is what recalibrate-check and hatch-trend count; the recalibrate tokens
+        # are what reset the counting window.
+        for token in ("`lesson`", "recalibrate-minor"):
+            self.assertIn(token, text, f"log.md must document the {token} mode")
+
+    def test_the_logs_own_example_line_parses_as_a_lesson(self):
+        example = self.example_line(self.template("log.md"), "lesson |")
+        m = ps.DATED_RE.match(example)
+        self.assertIsNotNone(m, f"log.md's example does not parse: {example!r}")
+        self.assertEqual(m["mode"], "lesson")
+
+    def test_the_logs_example_counts_toward_the_recalibrate_trigger(self):
+        example = self.example_line(self.template("log.md"), "lesson |")
+        self.assertEqual(ps._count_after([example], None, mode="lesson"), 1)
+
+    def test_review_queue_example_parses_with_the_prompt_regex(self):
+        text = self.template("review-queue.md")
+        # The template documents the shape with placeholders; build a concrete line from
+        # the same field order and assert the parser accepts it.
+        line = ("- due:2026-07-30 | int:6 | ef:2.50 | reps:2 | distributed-systems | "
+                "Q:: what is the safety property? | A:: at most one entry per index")
+        self.assertIn("due:<YYYY-MM-DD>", text)
+        self.assertIsNotNone(ps.parse_prompt(line))
+
+    def test_topic_index_example_marker_row_parses(self):
+        text = self.template("topic-index.md")
+        rows = [l.strip() for l in text.splitlines()
+                if l.strip().startswith("|") and "low" in l and "---" not in l]
+        self.assertTrue(rows, "topic-index.md should document an example marker row")
+        concrete = rows[0].replace("<domain>", "docker").replace("<date>", "2026-07-30") \
+            .replace("<one-line depth>", "builds multi-stage images")
+        self.assertIsNotNone(ps.MARKER_RE.match(concrete),
+                             f"documented marker row does not parse: {concrete!r}")
+
+    def test_calibration_log_field_order_matches_the_hatch_parser(self):
+        text = self.template("calibration-log.md")
+        self.assertIn("<date> | <domain> | <miss-type>", text)
+        entry = f"2026-07-30 | docker | {ps.HATCH_TYPE} | asked outright | lower tolerance"
+        self.assertEqual(ps._hatch_entry(entry), (date(2026, 7, 30), "docker"))
+
+    def test_every_template_the_code_reads_exists(self):
+        for name in ("log.md", "calibration-log.md", "review-queue.md", "topic-index.md"):
+            with self.subTest(template=name):
+                self.assertTrue((self.TEMPLATES / name).exists())
+
+    @staticmethod
+    def example_line(text: str, contains: str) -> str:
+        for line in text.splitlines():
+            stripped = line.strip().strip("`")
+            if contains in stripped and stripped[:4].isdigit():
+                return stripped
+        raise AssertionError(f"no example line containing {contains!r}")
+
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
