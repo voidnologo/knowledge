@@ -534,13 +534,100 @@ class TestFormulaGrammar(unittest.TestCase):
     def test_accepts_real_expressions(self):
         cases = {
             "rho / (1 - rho)": 'v["rho"]/(1-v["rho"])',
-            "-rho + 1": '-v["rho"]+1',
+            "-rho + 1": '(-v["rho"])+1',
             "pow(2, rho)": 'Math.pow(2,v["rho"])',
             "max(rho, 0.1) / min(1, 2)": 'Math.max(v["rho"],0.1)/Math.min(1,2)',
+            "1-2-3": "1-2-3",
+            "1/(2/3)": "1/(2/3)",
+            "2*(3+4)": "2*(3+4)",
         }
         for expr, expected in cases.items():
             with self.subTest(expr=expr):
                 self.assertEqual(pv.compile_formula(expr, {"rho", "n"}, "w"), expected)
+
+    def test_unary_is_parenthesized_so_signs_cannot_fuse(self):
+        # Bare concatenation produced JS `--`/`++`: `1 - -2` became `1--2` (a SyntaxError
+        # that kills the whole script block) and `- -rho` became `--v["rho"]` — valid
+        # pre-decrement, which returns the wrong value AND mutates the shared input
+        # object, corrupting every output computed after it.
+        self.assertEqual(pv.compile_formula("1--2", {"rho"}, "w"), "1-(-2)")
+        self.assertEqual(pv.compile_formula("- -rho", {"rho"}, "w"), '(-(-v["rho"]))')
+        for expr in ("1--2", "1 - -2", "1 ++ 2", "- -rho", "rho---rho", "rho - -0.05"):
+            with self.subTest(expr=expr):
+                js = pv.compile_formula(expr, {"rho"}, "w")
+                self.assertNotIn("--", js, f"{expr!r} emitted decrement: {js}")
+                self.assertNotIn("++", js, f"{expr!r} emitted increment: {js}")
+
+    def test_emitted_js_is_syntactically_valid_where_node_is_available(self):
+        import shutil
+        import subprocess
+        node = shutil.which("node")
+        if not node:
+            self.skipTest("node not available")
+        for expr in ("1--2", "- -rho", "rho---rho", "rho / (1 - rho)", "1 ++ 2",
+                     "pow(2, rho)", "max(rho, 0.1) / min(1, 2)"):
+            with self.subTest(expr=expr):
+                js = pv.compile_formula(expr, {"rho"}, "w")
+                probe = (f'var v={{"rho":0.5}};var before=v.rho;'
+                         f'var out=({js});'
+                         f'if(v.rho!==before)throw new Error("formula mutated its input");'
+                         f'if(typeof out!=="number"||!isFinite(out))'
+                         f'throw new Error("not a finite number: "+out);')
+                r = subprocess.run([node, "-e", probe], capture_output=True, text=True)
+                self.assertEqual(r.returncode, 0, f"{expr!r} -> {js}\n{r.stderr}")
+
+
+class TestNonFinite(unittest.TestCase):
+    """float() accepts nan/inf, and every ordering guard is a comparison — NaN slips past."""
+
+    def test_non_finite_slider_bounds_rejected(self):
+        for field, value in (("min", "nan"), ("max", "inf"), ("max", "1e400"),
+                             ("step", "nan"), ("value", "-inf")):
+            with self.subTest(field=field, value=value):
+                spec = json.loads(json.dumps(EXPLORABLE))
+                spec["contract"]["inputs"][0][field] = value
+                with self.assertRaises(pv.SpecError) as ctx:
+                    pv.compile_explorable(spec)
+                self.assertIn("finite", str(ctx.exception))
+
+    def test_non_finite_axis_rejected_rather_than_rendering_nan(self):
+        for axis, field in (("x", "min"), ("y", "max")):
+            with self.subTest(axis=axis, field=field):
+                spec = json.loads(json.dumps(CURVE))
+                spec["spec"][axis][field] = "nan"
+                with self.assertRaises(pv.SpecError):
+                    pv.figure_html(spec)
+
+    def test_non_finite_timeline_bound_rejected(self):
+        spec = json.loads(json.dumps(TIMELINE))
+        spec["spec"]["spans"][0]["end"] = "inf"
+        with self.assertRaises(pv.SpecError):
+            pv.figure_html(spec)
+
+    def test_no_nan_reaches_a_rendered_page(self):
+        self.assertNotIn("nan", good_page(*ALL_FIGURES, EXPLORABLE).lower())
+
+
+class TestNetworkScanPrecision(unittest.TestCase):
+    """The scan must not blame a network call that doesn't exist."""
+
+    def test_output_ids_named_after_network_apis_are_allowed(self):
+        for oid in ("WebSocket_ms", "eventsource_lag", "xmlhttprequest_cost", "fetch_ms",
+                    "worker_count"):
+            with self.subTest(oid=oid):
+                spec = json.loads(json.dumps(EXPLORABLE))
+                spec["contract"]["outputs"][1]["id"] = oid
+                spec["formulas"] = {"wait": "rho", oid: "1 - rho"}
+                pv.validate_page(good_page(spec))
+
+    def test_real_network_calls_are_still_caught(self):
+        for js in ("fetch('/x')", "new XMLHttpRequest()", "new WebSocket('/x')",
+                   "new EventSource('/x')", "navigator.sendBeacon('/x')",
+                   "new Worker('w.js')", "eval('x')", "import('/m.js')"):
+            with self.subTest(js=js):
+                html = good_page(SEQUENCE).replace("<script>", f"<script>{js};", 1)
+                with self.assertRaises(pv.ValidationError):
+                    pv.validate_page(html)
 
 
 class TestContractGuards(unittest.TestCase):
@@ -600,6 +687,16 @@ class TestRevealGating(unittest.TestCase):
         region = pv._figure_region(good_page(spec), "raft-partition")
         self.assertNotIn(pv.esc(spec["predict"]),
                          pv._closed_details_body(region, "raft-partition"))
+
+    def test_gate_check_survives_a_tampered_manifest(self):
+        # `validate` is a standalone re-check of an existing page, so the check cannot key
+        # off the manifest's own `blank` field — that field is editable.
+        html = good_page(SEQUENCE).replace('"blank":["m3"]', '"blank":[]')
+        pv.validate_page(html)  # still gated, so still valid
+        ungated = html.replace(
+            '<details><summary>I have committed to a prediction — reveal</summary>\n', "")
+        with self.assertRaises(pv.ValidationError):
+            pv.validate_page(ungated)
 
     def test_reveal_without_a_blank_is_rejected(self):
         with self.assertRaises(pv.SpecError) as ctx:
@@ -764,6 +861,57 @@ class TestAscii(unittest.TestCase):
         # no-op here hands over the answer before the page is ever rendered.
         with self.assertRaises(pv.SpecError):
             pv.ascii_figure(dict(SEQUENCE, blank=["m33"]))
+
+    def test_ascii_rejects_everything_render_rejects(self):
+        # The terminal comes first (Deepen), the page second (Recap) — so a spec error
+        # that only `render` catches would surface after the learner saw the figure.
+        cases = [
+            ("over-budget label", SEQUENCE,
+             lambda s: s["spec"]["messages"][0].__setitem__("label", "x" * 80)),
+            ("three curve series", CURVE, lambda s: s["spec"]["series"].extend(
+                [{"label": "b", "points": [[0, 1], [1, 2]]},
+                 {"label": "c", "points": [[0, 1], [1, 2]]}])),
+            ("reversed axis", CURVE, lambda s: s["spec"]["x"].update({"min": 5, "max": 1})),
+            ("mistyped messages", SEQUENCE,
+             lambda s: s["spec"].__setitem__("messages", {"m1": {}})),
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            for i, (name, base, mutate) in enumerate(cases):
+                with self.subTest(case=name):
+                    spec = json.loads(json.dumps(base))
+                    mutate(spec)
+                    artifact = Path(tmp) / f"a{i}.md"
+                    artifact.write_text(artifact_text(spec), encoding="utf-8")
+                    self.assertEqual(pv.main(["ascii", str(artifact)]), 1, name)
+
+    def test_mistyped_collection_names_itself_not_the_blank_id(self):
+        spec = json.loads(json.dumps(SEQUENCE))
+        spec["spec"]["messages"] = {"m1": {"from": "L", "to": "F1"}}
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.figure_html(spec)
+        self.assertIn("'messages' must be a list of objects", str(ctx.exception))
+
+    def test_non_string_element_id_is_named(self):
+        spec = json.loads(json.dumps(SEQUENCE))
+        spec["spec"]["messages"][2]["id"] = 3
+        spec["blank"] = ["m1"]
+        with self.assertRaises(pv.SpecError) as ctx:
+            pv.figure_html(spec)
+        self.assertIn("non-string id", str(ctx.exception))
+
+    def test_over_budget_labels_are_caught_on_every_channel(self):
+        for name, base, mutate in [
+            ("boundary_label", LAYERS,
+             lambda s: s["spec"].__setitem__("boundary_label", "y" * 40)),
+            ("timeline unit", TIMELINE, lambda s: s["spec"].__setitem__("unit", "z" * 40)),
+            ("blanked label", SEQUENCE,
+             lambda s: s["spec"]["messages"][2].__setitem__("label", "w" * 40)),
+        ]:
+            with self.subTest(case=name):
+                spec = json.loads(json.dumps(base))
+                mutate(spec)
+                with self.assertRaises(pv.SpecError):
+                    pv.figure_html(spec)
 
     def test_layers_boundary_below_the_last_layer_is_drawn(self):
         spec = dict(LAYERS, spec={**LAYERS["spec"], "boundary_after": 3})

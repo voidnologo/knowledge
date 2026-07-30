@@ -23,6 +23,7 @@ Commands:
 
 import argparse
 import json
+import math
 import re
 import sys
 import webbrowser
@@ -131,9 +132,8 @@ def path(d: str, cls: str = "", marker: bool = True) -> str:
     return f'<path class="pv-l {cls}" d="{d}"{tip} fill="none"/>'
 
 
-# The arrowhead marker is defined once per page (below) and referenced by every figure;
+# The arrowhead marker is defined once per page and referenced by every figure;
 # repeating the <defs> per <svg> would put duplicate ids in the document.
-ARROW_DEFS = ""
 ARROW_DEFS_PAGE = ('<svg width="0" height="0" aria-hidden="true" '
                    'xmlns="http://www.w3.org/2000/svg"><defs>'
                    '<marker id="pv-head" viewBox="0 0 10 10" refX="9" refY="5" '
@@ -173,13 +173,23 @@ def check_id(value: Any, what: str, fig: str, pattern: re.Pattern[str] = ID_RE) 
 
 
 def num(spec: dict[str, Any], key: str, default: Any, what: str, fig: str) -> float:
-    """Read a numeric spec field. Specs are model-authored, so the type is not a given."""
+    """Read a finite numeric spec field. Specs are model-authored, so nothing is a given.
+
+    Finiteness is not pedantry: `float()` accepts "nan", "inf", and "1e400", every
+    ordering guard here is a comparison, and NaN compares False against everything — so a
+    NaN slipped past both `max <= min` checks and reached the page as `y="nan"`, which is
+    well-formed XML and invalid SVG. The figure rendered blank with all checks passing.
+    """
     raw = spec.get(key, default)
     try:
-        return float(raw)
+        value = float(raw)
     except (TypeError, ValueError):
         raise SpecError(f"'{fig}': {what} field '{key}' must be a number; "
                         f"got {raw!r}") from None
+    if not math.isfinite(value):
+        raise SpecError(f"'{fig}': {what} field '{key}' must be a finite number; "
+                        f"got {raw!r}")
+    return value
 
 
 def obj_list(spec: dict[str, Any], key: str, kind: str, fig: str) -> list[dict[str, Any]]:
@@ -235,10 +245,13 @@ def _plain_label(value: Any, what: str, fig: str) -> str:
 
 
 def _label_text(item: dict[str, Any], blanks: set[str], what: str, fig: str) -> str:
-    """A blankable element's visible label: `?` when blanked, budget-checked otherwise."""
-    if item.get("id") in blanks:
-        return QMARK
-    return _plain_label(item.get("label", ""), what, fig)
+    """A blankable element's visible label: `?` when blanked, budget-checked otherwise.
+
+    The budget is checked either way. Skipping it for blanked elements meant a figure
+    validated while blanked and started failing the moment someone unblanked it.
+    """
+    label = _plain_label(item.get("label", ""), what, fig)
+    return QMARK if item.get("id") in blanks else label
 
 
 def render_sequence(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
@@ -255,7 +268,7 @@ def render_sequence(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
                 return LANE_W / 2 + i * LANE_W
         raise SpecError(f"sequence '{fig}': references unknown participant '{pid}'")
 
-    out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
+    out = [svg_open(width, height, spec.get("invariant", fig))]
     for i, p in enumerate(parts):
         x = LANE_W / 2 + i * LANE_W
         out.append(box(x - LANE_W / 2 + 12, 8, LANE_W - 24, LANE_TOP_H - 8))
@@ -326,7 +339,7 @@ def render_state(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     def cx(sid: str) -> float:
         return gap + idx(sid) * (sw + gap) + sw / 2
 
-    out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
+    out = [svg_open(width, height, spec.get("invariant", fig))]
     for i, s in enumerate(states):
         x = gap + i * (sw + gap)
         cls = "pv-initial" if s.get("initial") else ""
@@ -389,7 +402,7 @@ def render_quorum(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     progress = spec.get("progress", "none")
     blanked = "progress" in blanks
 
-    out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
+    out = [svg_open(width, height, spec.get("invariant", fig))]
     x = 10.0
     for gi, group in enumerate(groups):
         wins = _group_wins(progress, gi, len(groups))
@@ -443,7 +456,7 @@ def render_layers(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
     bw, bh, gap, left = 430.0, 54.0, 14.0, 46.0
     width = left + bw + 20
     height = 20 + len(layers) * (bh + gap) + 24
-    out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
+    out = [svg_open(width, height, spec.get("invariant", fig))]
     out.append(arrow(left / 2, 24, left / 2, height - 34, "pv-dash"))
     out.append(text(left / 2, height - 16, "path", "pv-sm"))
 
@@ -463,11 +476,11 @@ def render_layers(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
         if not 0 <= idx < len(layers):
             raise SpecError(f"layers '{fig}': boundary_after must index a layer "
                             f"(0–{len(layers) - 1}); got {after!r}")
-        blanked = "boundary" in blanks
         y = 20 + (idx + 1) * (bh + gap) - gap / 2
         out.append(line(left - 16, y, left + bw + 8, y, "pv-partition"))
-        label = QMARK if blanked else spec.get("boundary_label", "boundary")
-        out.append(text(left + bw + 4, y - 7, label, "pv-sm", "end"))
+        label = _plain_label(spec.get("boundary_label", "boundary"), "boundary", fig)
+        out.append(text(left + bw + 4, y - 7,
+                        QMARK if "boundary" in blanks else label, "pv-sm", "end"))
     out.append("</svg>")
     return "\n".join(out)
 
@@ -492,7 +505,7 @@ def render_curve(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
         span = ya["max"] - ya["min"] or 1.0
         return mt + ph - (float(v) - ya["min"]) / span * ph
 
-    out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
+    out = [svg_open(width, height, spec.get("invariant", fig))]
     out.append(line(ml, mt, ml, mt + ph, "pv-axis"))
     out.append(line(ml, mt + ph, ml + pw, mt + ph, "pv-axis"))
     out.append(text(ml + pw / 2, height - 12, xa.get("label", "x"), "pv-sm"))
@@ -586,7 +599,7 @@ def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
                 return mt + i * row
         raise SpecError(f"timeline '{fig}': span references unknown actor '{aid}'")
 
-    out = [svg_open(width, height, spec.get("invariant", fig)), ARROW_DEFS]
+    out = [svg_open(width, height, spec.get("invariant", fig))]
     for i, a in enumerate(actors):
         y = mt + i * row
         out.append(text(ml - 12, y + row / 2 + 5,
@@ -605,7 +618,7 @@ def render_timeline(spec: dict[str, Any], blanks: set[str], fig: str) -> str:
 
     axis_y = height - 30
     out.append(line(ml, axis_y, ml + pw, axis_y, "pv-axis"))
-    unit = spec.get("unit", "")
+    unit = _plain_label(spec.get("unit", ""), "unit", fig) if spec.get("unit") else ""
     out.append(text(ml, axis_y + 16, f"{lo:g}", "pv-sm"))
     out.append(text(ml + pw, axis_y + 16, f"{hi:g} {unit}".strip(), "pv-sm"))
     out.append("</svg>")
@@ -632,11 +645,21 @@ def _ids_of(spec: dict[str, Any], *keys: str) -> set[str]:
     """
     found: set[str] = set()
     for key in keys:
-        value = spec.get(key, [])
-        if not isinstance(value, list):
+        if key not in spec:
             continue
-        found |= {i["id"] for i in value
-                  if isinstance(i, dict) and isinstance(i.get("id"), str)}
+        value = spec[key]
+        if not isinstance(value, list) or not all(isinstance(i, dict) for i in value):
+            # Naming the mistyped collection here matters: this runs before the
+            # renderer's type checks, so staying silent meant the author was told their
+            # blank id was wrong when the real problem was the collection's shape.
+            raise SpecError(f"'{key}' must be a list of objects; got "
+                            f"{type(value).__name__}")
+        bad_id = next((i["id"] for i in value
+                       if "id" in i and not isinstance(i["id"], str)), None)
+        if bad_id is not None:
+            raise SpecError(f"an entry in '{key}' has a non-string id ({bad_id!r}); ids "
+                            f"must be strings or the element cannot be blanked")
+        found |= {i["id"] for i in value if isinstance(i.get("id"), str)}
     return found
 
 
@@ -748,7 +771,15 @@ class _Parser:
 
     def factor(self) -> str:
         op = self.take_op("+", "-")
-        return op + self.factor() if op else self.primary()
+        if not op:
+            return self.primary()
+        # Parenthesized, not concatenated. Bare concatenation fuses adjacent sign tokens
+        # into JS `--`/`++`: `1 - -2` became `1--2` (a SyntaxError that kills the whole
+        # script block) and `- -rho` became `--v["rho"]` — *valid* pre-decrement, which
+        # returns the wrong number and mutates the shared input object, so every output
+        # computed after it in the same update reads corrupted state. That is the exact
+        # "outputs don't track inputs" failure this compiler exists to prevent.
+        return f"({op}{self.factor()})"
 
     def primary(self) -> str:
         token = self.peek()
@@ -1087,7 +1118,10 @@ def figure_html(spec: dict[str, Any]) -> str:
 
 
 def _check_blanks(fig: str, blanks: set[str], spec: dict[str, Any]) -> None:
-    allowed = blankable_ids(spec)
+    try:
+        allowed = blankable_ids(spec)
+    except SpecError as exc:
+        raise SpecError(f"figure '{fig}': {exc}") from None
     unknown = sorted(blanks - allowed)
     if unknown:
         raise SpecError(f"figure '{fig}': blank ids {unknown} match nothing blankable "
@@ -1218,21 +1252,25 @@ MANIFEST_RE = re.compile(r"<!--pv-manifest (\{.*?\})-->", re.DOTALL)
 SVG_RE = re.compile(r"<svg\b.*?</svg>", re.DOTALL)
 DETAILS_RE = re.compile(r"<details(?P<attrs>[^>]*)>(?P<body>.*?)</details>", re.DOTALL)
 
-TAG_RE = re.compile(r"<[a-zA-Z][^>]*>")
+TAG_RE = re.compile(r"""<[a-zA-Z](?:"[^"]*"|'[^']*'|[^'">])*>""")
 ATTR_RE = re.compile(r"""([a-zA-Z_:][-a-zA-Z0-9_:.]*)\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)""")
 STYLE_RE = re.compile(r"<style\b[^>]*>(.*?)</style>", re.DOTALL)
 SCRIPT_RE = re.compile(r"<script\b[^>]*>(.*?)</script>", re.DOTALL)
 # Attributes that can cause a fetch. Scanning by attribute name rather than by a
 # `src=`-shaped pattern is what catches `srcset`, `poster`, `data`, and friends.
-URL_ATTRS = {"src", "srcset", "href", "xlink:href", "data", "poster", "action",
-             "formaction", "background", "cite", "codebase", "longdesc", "profile",
-             "manifest", "ping", "usemap"}
+URL_ATTRS = {"src", "srcset", "srcdoc", "href", "xlink:href", "data", "poster",
+             "action", "formaction", "background", "cite", "codebase", "longdesc",
+             "profile", "manifest", "ping", "usemap", "dynsrc", "lowsrc"}
 # Schemes that stay on the machine. Anything else in a URL attribute is a network hop.
 LOCAL_URL_RE = re.compile(r"^\s*(?:#|data:|file:)", re.IGNORECASE)
 # Network APIs. A CSP blocks these at runtime, but failing the build is a clearer signal.
-JS_NETWORK_RE = re.compile(r"\bfetch\s*\(|XMLHttpRequest|\bimport\s*\(|sendBeacon"
-                           r"|new\s+Worker|EventSource|WebSocket|\beval\s*\(",
-                           re.IGNORECASE)
+# Each alternative requires a call or `new` context. Bare name matching false-positived
+# on the generated element-id literals, so a lesson about WebSockets could not name an
+# output after its own subject.
+JS_NETWORK_RE = re.compile(r"\bfetch\s*\(|\beval\s*\(|\bimport\s*\("
+                           r"|\bnew\s+(?:XMLHttpRequest|Worker|SharedWorker|WebSocket"
+                           r"|EventSource)\b|\bXMLHttpRequest\s*\("
+                           r"|\.sendBeacon\s*\(|\bimportScripts\s*\(")
 CSS_NETWORK_RE = re.compile(r"@import|url\(\s*['\"]?(?!data:)[a-zA-Z0-9+.-]*:?//",
                             re.IGNORECASE)
 
@@ -1379,7 +1417,12 @@ def _check_reveals(html: str, manifest: dict[str, Any]) -> None:
         # An unblanked figure has nothing to gate. `diagramming.md` pushes hard toward
         # blanking, but a pure orientation figure legitimately has no prediction to make,
         # so this is a check on gating being *effective*, not on it being present.
-        if not explorable and not fig.get("blank"):
+        #
+        # Keyed on the reveal being in the document, not on the manifest's `blank` field:
+        # `validate` is documented as a standalone re-check of an existing page, and a
+        # hand-edited manifest could otherwise switch the check off for a figure whose
+        # answer is right there.
+        if not explorable and '<p class="reveal">' not in region:
             continue
         gated = _closed_details_body(region, fid)
         needle = '<div class="ctl">' if explorable else '<p class="reveal">'
@@ -1461,7 +1504,8 @@ Explorables declare a contract; the wiring is generated, never hand-written:
    "formulas":{"wait":"rho / (1 - rho)"}}
   -->
 
-Formulas are PARSED as arithmetic, not merely filtered: numbers, declared input ids,
+Formulas are PARSED as arithmetic, not merely filtered: numbers (leading digit
+required, no exponent form -- 0.5 not .5), declared input ids,
 + - * / ( ) , and min max abs sqrt exp log pow with correct arity (min/max/pow take 2).
 Max 2 inputs, each of which some formula must read. Every output needs exactly one
 formula and vice versa. Input ids may not contain "-" (a-b is subtraction); output ids
@@ -1507,6 +1551,10 @@ def cmd_ascii(args: argparse.Namespace) -> int:
         print(f"error: no figure with id '{args.id}' in {artifact.name}", file=sys.stderr)
         return 2
     for block in wanted:
+        # Validate the whole spec, not just the blanks. The figure beat runs in the
+        # terminal during Deepen and `render` runs at Recap, so anything only `render`
+        # rejects would surface *after* the learner has already seen the figure.
+        _validate_spec(block)
         print(f"{block.spec.get('caption', '')}\n")
         if block.kind != "figure":
             print(f"[explorable '{block.id}' has no terminal rendering — it needs the "
@@ -1515,6 +1563,14 @@ def cmd_ascii(args: argparse.Namespace) -> int:
         print(ascii_figure(block.spec))
         print()
     return 0
+
+
+def _validate_spec(block: Block) -> None:
+    """Run the full page-side spec validation, discarding the output."""
+    if block.kind == "figure":
+        figure_html(block.spec)
+        return
+    compile_explorable(block.spec)
 
 
 def main(argv: list[str] | None = None) -> int:
