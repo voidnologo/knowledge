@@ -111,7 +111,7 @@ On demand, a full meta-session (not a lesson):
 3. **Confidence audit:** List low-confidence markers — assumptions never actually tested — as candidates to probe in upcoming lessons.
 4. **Re-confirm stable traits** with the learner: has register / struggle tolerance / correction style changed? People change; the profile should be allowed to.
 5. **Compact volatile churn:** collapse superseded depth-marker history; archive resolved open-questions.
-6. **Flag stale canon:** surface `source-canon.md` floor entries that now fail the stale-criteria (ties into `primer/source-canon.md` refresh).
+6. **Flag stale sources:** ask the ledger rather than re-reading the canon by eye — `primer_sources.py sources-stale` (past the freshness horizon, most-used first) and `sources-unverified` (the `[from-training, verify]` backlog). Both are queryable lists now, not remembered rituals; work the top of each. See `primer/research-protocol.md`.
 7. **Output a "what I changed and why" diff** and apply on confirmation.
 
 The distinction that matters: the minor tier keeps volatile state honest cheaply and automatically; the deep tier is the only place stable traits and goals get rewritten, and it does so on accumulated evidence with the learner in the loop — never on a single session.

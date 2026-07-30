@@ -37,6 +37,7 @@ The `primer/*` files are the **engine** — they ship with the public core. Only
 | `primer/feedback-protocol.md` | Recap state updates, `recalibrate`, `review` | moving any depth marker or confidence |
 | `primer/lesson-template.md` | writing the lesson artifact | the artifact's structure and prompt-quality bar |
 | `primer/source-canon.md` | the Deepen step's source-discovery pass | vetting or citing a source |
+| `primer/research-protocol.md` | same time as `source-canon.md` | running the pass — query classes, vetting procedure, recording verdicts |
 | `primer/visuals.md` | a lesson that will show a figure | choosing a diagram form |
 | `primer/diagramming.md` | authoring a figure spec | composing the figure or its blanked variant |
 
@@ -60,6 +61,8 @@ Then read `$DATA_DIR/learner/profile.md` and `$DATA_DIR/learner/topic-index.md` 
 
 Mechanical bookkeeping — spaced-repetition scheduling, confidence decay, the recalibrate trigger — runs as code: `python3 ${CLAUDE_SKILL_DIR}/tools/primer_state.py --data-dir "$DATA_DIR" <cmd>` (Python stdlib only; commands: `review-due`, `review-grade`, `review-add`, `review-history`, `markers-decay`, `recalibrate-check`). Call it and act on its output; don't recompute dates/intervals/counts by hand — that's token-expensive and error-prone. It reads and rewrites the markdown state files (which remain the source of truth, hand-editable and git-syncable). See `primer/feedback-protocol.md` and DECISIONS D-0018/D-0020.
 
+The same rule covers the **source ledger**: `python3 ${CLAUDE_SKILL_DIR}/tools/primer_sources.py --data-dir "$DATA_DIR" <cmd>` (commands: `sources-add`, `sources-check`, `sources-stale`, `sources-unverified`, `sources-floor`, `sources-promote`, `sweep-record`, `sweep-check`). Freshness is arithmetic over dates — ask the script, don't eyeball it. See `primer/research-protocol.md` and D-0025.
+
 ## The argument
 
 The skill takes one argument. Route on it:
@@ -77,7 +80,7 @@ Run when no instance exists. **Read `primer/intake-protocol.md` first**, then ex
 1. **Calibrate.** Read `$DATA_DIR/learner/profile.md` (stable traits) and `$DATA_DIR/learner/topic-index.md` (depth markers with confidence + evidence, open ZPD edges). Note the depth marker and its confidence for the topic's domain — low-confidence markers are assumptions to probe, not facts to fade past. Note prior lessons in this domain and relevant entries in `$DATA_DIR/learner/open-questions.md`.
 2. **Minor recalibrate check (evidence-triggered, capped).** Ask the scheduler, don't count by hand: `python3 ${CLAUDE_SKILL_DIR}/tools/primer_state.py --data-dir "$DATA_DIR" recalibrate-check` (fires on 4+ misses or 8+ lessons since the last recalibrate; defaults configurable — see `primer/feedback-protocol.md`). If it fires, run the minor recalibrate first: apply decay with `… markers-decay` (drifts stale high-confidence markers to med + reprobe), scan `calibration-log.md` for repeated misses, flip warranted statuses, show a 3–5 line diff, then proceed. Log the run as `<date> | recalibrate-minor | …` so the next check counts from here.
 3. **Plan.** Propose a one-paragraph lesson plan: framing, key invariants, what you'll skip given their depth. Get a quick acknowledgment or course-correction.
-4. **Run the protocol.** Read `primer/lesson-protocol.md` and `primer/anti-patterns.md`, then run Elicit → Probe → Diagnose → Deepen → Recap. The Deepen step's source-discovery pass is mandatory (read `primer/source-canon.md` for it). Use AskUserQuestion sparingly; default to free-form conversation.
+4. **Run the protocol.** Read `primer/lesson-protocol.md` and `primer/anti-patterns.md`, then run Elicit → Probe → Diagnose → Deepen → Recap. The Deepen step's source-discovery pass is mandatory — read `primer/source-canon.md` (the floor and stale-criteria) and `primer/research-protocol.md` (how the pass runs; ask the ledger before sweeping, and dispatch the sweep to a subagent so it doesn't spend the lesson's context). Use AskUserQuestion sparingly; default to free-form conversation.
 5. **Self-check** against `primer/anti-patterns.md` before writing the artifact.
 6. **Write the artifact** to `$DATA_DIR/lessons/<domain-slug>/<YYYY-MM-DD>-<lesson-slug>.md` per `primer/lesson-template.md` (read it). Include retrieval prompts. Promote any load-bearing newly-discovered source into the canon floor. If the lesson carried figures, write the view page (see `/primer view`).
 7. **Update state** (read `primer/feedback-protocol.md`):

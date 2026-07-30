@@ -7,7 +7,7 @@ This file is **not** the set of sources a lesson is permitted to cite. It is two
 1. A **vetted floor** — sources already explored and confirmed load-bearing in 2026. Cite them freely; they are a shortcut for exploration already done. Their presence here does **not** mean they are the only good sources, and their absence does **not** mean a source is disallowed.
 2. A **stale-list** — sources explicitly avoided. *This* is the currency guardrail, not the floor.
 
-**Every lesson runs a source-discovery pass** (see `primer/lesson-protocol.md`): the Primer actively searches for current sources on the specific topic, beyond the floor, vets them against the stale-criteria below, and cites them with the usual tags. The floor is where a lesson *starts*, never where it *stops*. A closed allowlist would freeze knowledge at the moment the list was written — the opposite of the goal.
+**Every lesson runs a source-discovery pass.** The floor is where a lesson *starts*, never where it *stops*. A closed allowlist would freeze knowledge at the moment the list was written — the opposite of the goal. **The pass is a procedure, not an improvisation: read `primer/research-protocol.md`** for the query templates by source class, the vetting decision procedure, the coverage floor, and how verdicts get recorded so the next lesson reuses them instead of re-judging.
 
 This file is a living document. Each session checks `freshness_check` in its frontmatter; if the canon is more than ~3 months stale at session start, re-validate before grounding claims. Sources that prove load-bearing in a lesson get promoted back into the floor at recap (see *Refreshing this file*), so the floor grows from real use.
 
@@ -130,7 +130,9 @@ A source is stale — and excluded regardless of where it was found — if any h
 
 Two triggers keep the floor current:
 
-**Per-lesson promotion (every session).** A source surfaced during the discovery pass that proved load-bearing for the lesson gets added to the floor at recap, with its tag. This is the primary growth path — the floor accretes from real use, not from scheduled reviews.
+**Per-lesson promotion (every session) goes to the learner's ledger, not to this file.** A source that proved load-bearing gets promoted at recap via `primer_sources.py sources-promote`, which marks it as floor in `$DATA_DIR/learner/source-ledger.md`. That ledger is the learner's own accreted floor, and `sources-floor --domain <d>` is what a future lesson reads as its starting set.
+
+This file is **never written to by a lesson.** It ships in the public core — a repo the learner pulls updates into — so a per-learner promotion here would leak what they study and conflict on every pull. Contributing a source upstream is a deliberate PR. (D-0025; the pass itself is `primer/research-protocol.md`.)
 
 **Periodic re-validation (`freshness_check` > ~3 months).** The skill should:
 

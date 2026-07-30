@@ -39,8 +39,10 @@ sources_consulted:
   - url: https://...
     tag: verified
     accessed: 2026-05-09
+    grounds: <the specific claim this source grounds>
   - url: https://...
     tag: from-training
+    grounds: <the specific claim still resting on training data — outstanding>
 freshness_check: 2026-05-09
 prior_lessons_referenced:
   - lessons/distributed-systems/2026-04-22-replication-flavors.md
