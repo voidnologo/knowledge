@@ -79,6 +79,8 @@ So: blank the element that carries the invariant, ask the learner to fill it, th
 
 If you find yourself wanting to blank something the table says is not concealable, that is a signal the figure is the wrong form for the claim — not a signal to blank the nearest label and hope.
 
+**A blank is only valid relative to what has already been said.** Re-check it against the conversation immediately before rendering: a spec authored ahead of its beat can have its answer given away by an intervening beat, at which point the `?` asks a question the learner has already been handed. Retarget onto something still unsaid, or drop the blank and show the figure whole. This is the figure-level version of the stale-sidecar problem, and pre-authored sets are where it bites.
+
 **Both channels conceal identically, and that is a tested property**, not a convention: the terminal cannot spoil the page and the page cannot spoil the terminal. The regression that motivated writing it down is worth knowing, because it passed every check at the time — a blanked `timeline` span rendered its bar at true coordinates with a `?` where its label had been, so the learner read the answer off the geometry while `render` reported `faded-reveal integrity: passed`. That check verifies the reveal *text* is gated; it says nothing about a drawing that answers its own prediction. (D-0029.)
 - **The caption must not answer the blank.** Nothing can check this for you — the caption is the one string shown above a blanked figure, so it is the remaining spoiler channel. "Leader isolated in a minority partition" is fine above a blanked ack; "Request path and trust boundary" is not fine above a blanked boundary label. Describe what the figure *is*, not what it *shows*.
 - Ask for a *specific* prediction: "what message has to happen here for the commit to be safe?" beats "what goes here?".
@@ -254,10 +256,16 @@ Rules the generator enforces:
 python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py templates          # list forms + spec schema
 python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py render <artifact.md>   # write + validate <slug>.view.html
 python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py render <artifact.md> --open   # …and open it
+python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py render <artifact.md> --upto <fig-id>  # mid-lesson: stop at this beat
+python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py render <artifact.md> --only <fig-id>  # …or just these (repeatable)
 python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py ascii <artifact.md> --id <fig-id>   # terminal rendering
 python3 ${CLAUDE_SKILL_DIR}/tools/primer_view.py validate <view.html>  # re-check an existing page
 ```
 
+**Use `--upto` for any page-only figure delivered mid-lesson.** The page is per-file while `ascii --id` is per-figure, so a bare `render` at beat 2 also publishes beat 5's caption and `predict` line — and those are shown ungated by design, so the reveal gate is no defence. `--upto` is what lets every spec live in the sidecar from the start, which is what keeps `.STATE.md` a complete cross-machine checkpoint.
+
 `render` validates before it reports success and exits non-zero with a specific message on failure. **Fix and re-run; never show the learner a page that failed validation.** The checks are: XML well-formedness, zero external requests, a caption on every figure, contract satisfaction, and faded-reveal integrity (the answer is not reachable before the learner commits).
 
-`ascii` gives the in-terminal rendering for the forms that support it (`sequence`, `layers`, `quorum`, `timeline`) so the same single spec serves both the live conversation and the page. Author the spec once.
+`ascii` gives the in-terminal rendering for the forms that support it (`sequence`, `layers`, `quorum`, `timeline`) so the same single spec serves both the live conversation and the page. Author the spec once. `curve` and `state` say plainly that they render on the page only, and keep their caption in the message so the learner knows what they are being sent to.
+
+The terminal renderings are **diagrams, not lists**: `sequence` draws real lifelines with the arrow between its two columns and the label to the right, and `timeline` positions spans on a shared axis. A form whose ASCII output would be rows and columns wearing arrows should be a table instead — the first version of the `sequence` renderer printed a participant header over a flat list of `from ──label──▶ to` rows, which promised lanes it never drew, and a learner spotted it immediately.

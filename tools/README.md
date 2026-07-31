@@ -34,7 +34,8 @@ Commands:
 - `review-add --domain D --question Q --answer A` — add a new prompt (initial schedule, due today).
 - `review-history --correct N --total M [--note ...]` — record a review session's score.
 - `markers-decay [--days N]` — drift stale `[high]` depth markers to `[med]` + flag reprobe (forgetting-aware).
-- `recalibrate-check` — is a minor recalibrate due? (fires on 4+ misses or 8+ lessons since the last one).
+- `recalibrate-check` — is a minor recalibrate due? (fires on 4+ misses or 8+ lessons since the last one). Counts only rows whose miss-type begins with a documented token, so annotation rows like `(mastery signal, not a miss)` don't inflate it; `MISS_TYPES` and the template's list are asserted equal by a test.
+- `recalibrate-mark [--note ...]` — record that a minor recalibrate ran. Writes a positional marker into `calibration-log.md`; everything below the last marker is what the next check counts. Run it at the end of every minor recalibrate — without it, counting falls back to comparing dates, and a recalibrate at session start hides every miss logged later the same day.
 - `hatch-log --domain D [--note ...]` — record a "just show me" escape-hatch use.
 - `hatch-trend [--window N]` — escape-hatch rate per domain over the last N lessons. The hatch is right to offer; a rising rate is the dependence signal, and it was invisible until counted.
 
@@ -57,8 +58,9 @@ Commands:
 
 - `templates` — list the six figure forms and their full spec schema. Read this before authoring a spec.
 - `render <artifact.md> [--open]` — write and validate `<stem>.view.html`; prints the `file://` URL.
+- `render <artifact.md> --upto ID` / `--only ID` — render a subset. **Use `--upto` for any page-only figure delivered mid-lesson**: the page is per-file while `ascii --id` is per-figure, so a bare `render` at beat 2 also publishes beat 5's caption and `predict` line, and those are ungated by design. `--upto` is what lets every spec live in the sidecar from the start, keeping `.STATE.md` a complete cross-machine checkpoint.
 - `validate <view.html>` — re-check an existing page.
-- `ascii <artifact.md> [--id ID]` — terminal rendering, for the live conversation.
+- `ascii <artifact.md> [--id ID]` — terminal rendering, for the live conversation. Supports `sequence`, `layers`, `quorum`, `timeline`; `curve` and `state` report that they are page-only and keep their caption in the message.
 
 Two design choices worth knowing:
 

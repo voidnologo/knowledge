@@ -77,6 +77,8 @@ python3 ${CLAUDE_SKILL_DIR}/tools/primer_sources.py --data-dir "$DATA_DIR" \
   sources-add --url <u> --domain <d> --tag verified --verdict cite --why "<one line>"
 ```
 
+Two constraints worth knowing before a sweep writes twenty of these: **`--why` is capped at 400 characters and may not contain a `|`** (the ledger is pipe-delimited, one entry per line), and **`sweep-record --note` has the same 400-character cap.** Both reject with a specific message and a non-zero exit, so a `set -e` loop stops rather than skipping silently — but a loop that ignores exit codes will drop the entry, and the rejects are the entries most worth keeping.
+
 Re-adding an existing URL is the normal case — it refreshes `checked`, bumps `used`, and keeps the original `seen`. A source used in five lessons with a stale `checked` is the first thing to re-verify.
 
 At recap, promote what proved load-bearing:

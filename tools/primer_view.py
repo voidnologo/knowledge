@@ -972,15 +972,77 @@ def _label(item: dict[str, Any], blanks: set[str]) -> str:
 
 
 def _ascii_sequence(spec: dict[str, Any], blanks: set[str], fig: str = "<ascii>") -> str:
-    labels = {p["id"]: p.get("label", p["id"]) for p in spec.get("participants", [])}
-    rows = ["  " + "   ".join(labels.values()), ""]
+    """A sequence diagram with actual lifelines, drawn top-to-bottom.
+
+    The previous version printed a participant header and then a flat list of `from ──label──▶ to`
+    rows. The header implied columns and lifelines the rows never used, which made it a table
+    advertising itself as a diagram — the thing `visuals.md` explicitly forbids, and a learner
+    called it out on sight: "trying to sketch a mermaid chart but it didn't render as a chart."
+
+    So the lanes are real. Each participant owns a column, each message is an arrow drawn
+    between its two columns at its own row, and direction is visible in the arrowhead rather
+    than in the reading order of a sentence. Labels sit to the right of the lanes, because a
+    34-character budget does not fit between two columns and truncating it would reintroduce
+    the F-14 defect in a new place.
+    """
+    parts = spec.get("participants", [])
+    if not parts:
+        return ""
+    names = [_plain_label(p.get("label", p.get("id", "?")), "participant", fig) for p in parts]
+    col_of = {p["id"]: i for i, p in enumerate(parts)}
+    pitch = max(max((len(n) for n in names), default=0) + 2, 8)
+    # Column centres, with a left margin the labels are centred over.
+    cx = [2 + i * pitch + (pitch - 1) // 2 for i in range(len(parts))]
+    width = cx[-1] + (pitch - 1) // 2 + 2
+
+    def blank_row() -> list[str]:
+        row = [" "] * width
+        for x in cx:
+            row[x] = "│"
+        return row
+
+    def emit(row: list[str], label: str) -> str:
+        # Pad to the last lane so labels line up down the right-hand side regardless of
+        # how far across the diagram each arrow reaches.
+        return ("".join(row).rstrip().ljust(cx[-1] + 1) + (f"  {label}" if label else "")).rstrip()
+
+    rows = ["  " + "".join(n.center(pitch) for n in names).rstrip(), emit(blank_row(), "")]
     for m in spec.get("messages", []):
-        mark = "╳" if m.get("lost") else "▶"
-        rows.append(f"  {labels.get(m['from'], m['from'])} ──{_label(m, blanks)}──{mark} "
-                    f"{labels.get(m['to'], m['to'])}")
+        a, b = col_of.get(m.get("from")), col_of.get(m.get("to"))
+        if a is None or b is None:
+            raise SpecError(f"sequence '{fig}': message references an unknown participant")
+        row = blank_row()
+        if a == b:  # self-call: a stub rather than a zero-length arrow
+            row[cx[a]] = "├"
+            for x in range(cx[a] + 1, min(cx[a] + 4, width - 1)):
+                row[x] = "─"
+            row[min(cx[a] + 4, width - 1)] = "╮"
+        elif m.get("lost"):
+            # Cut short of its target: the arrow stops at the break, so "did not arrive"
+            # is visible in the drawing rather than only in the label.
+            lo, hi = sorted((cx[a], cx[b]))
+            stop = (lo + hi) // 2
+            fill = "╌" if m.get("dashed") else "─"
+            step = 1 if cx[b] > cx[a] else -1
+            for x in range(cx[a] + step, stop, step):
+                row[x] = fill
+            row[cx[a]] = "├"
+            row[stop] = "╳"
+        else:
+            lo, hi = sorted((cx[a], cx[b]))
+            fill = "╌" if m.get("dashed") else "─"
+            for x in range(lo + 1, hi):
+                row[x] = fill
+            row[cx[a]] = "├"
+            row[cx[b]] = "◀" if b < a else "▶"
+        rows.append(emit(row, _label(m, blanks)))
     for n in spec.get("notes", []):
-        rows.append(f"    note over {labels.get(n['over'], n['over'])}: "
-                    f"{_label(n, blanks)}")
+        over = col_of.get(n.get("over"))
+        if over is None:
+            raise SpecError(f"sequence '{fig}': note references an unknown participant")
+        row = blank_row()
+        row[cx[over]] = "▪"
+        rows.append(emit(row, f"note: {_label(n, blanks)}"))
     return "\n".join(rows)
 
 
@@ -1250,11 +1312,48 @@ class Page:
     manifest: dict[str, Any] = field(default_factory=dict)
 
 
-def build_page(markdown: str, artifact: Path) -> Page:
+def select_blocks(blocks: list[Block], only: list[str], upto: str, artifact: str
+                  ) -> list[Block]:
+    """Narrow a file's blocks to the ones a beat should deliver.
+
+    The page is per-file and the terminal is per-figure, which meant a page-only form
+    (`curve`, `state`, an explorable) could not be handed over at its beat without shipping
+    every later figure in the same file. Captions and `predict` lines are shown ungated by
+    design — they have to be — so the reveal gate is no defence: the spoiler is in the part
+    that must stay visible. In a live lesson that put the *next* beat's question on the page
+    delivered for *this* one.
+
+    `--only`/`--upto` give the page channel the per-figure control the terminal already had,
+    so specs can all live in the sidecar from the start (which is what keeps `.STATE.md` a
+    complete cross-machine checkpoint) while the page shows only what has been reached.
+    """
+    known = [b.id for b in blocks if b.id]
+    if upto:
+        if upto not in known:
+            raise SpecError(f"{artifact}: --upto '{upto}' matches no figure. Present: "
+                            f"{', '.join(known) or '(none with ids)'}")
+        cut = known.index(upto)
+        keep = set(known[:cut + 1])
+        return [b for b in blocks if b.id in keep]
+    if only:
+        unknown = [i for i in only if i not in known]
+        if unknown:
+            raise SpecError(f"{artifact}: --only {unknown} matches nothing. Present: "
+                            f"{', '.join(known) or '(none with ids)'}")
+        return [b for b in blocks if b.id in set(only)]
+    return blocks
+
+
+def build_page(markdown: str, artifact: Path, only: list[str] | None = None,
+               upto: str = "") -> Page:
     blocks = extract_blocks(markdown)
     if not blocks:
         raise SpecError(f"{artifact.name}: no primer-figure or primer-explorable blocks "
                         f"found — nothing to render")
+    blocks = select_blocks(blocks, only or [], upto, artifact.name)
+    if not blocks:
+        raise SpecError(f"{artifact.name}: the selection matched no blocks — nothing to "
+                        f"render")
     title_match = TITLE_RE.search(markdown)
     title = title_match.group(1) if title_match else artifact.stem
     figures: list[str] = []
@@ -1600,7 +1699,10 @@ def cmd_templates(_: argparse.Namespace) -> int:
 
 def cmd_render(args: argparse.Namespace) -> int:
     artifact = Path(args.artifact)
-    page = build_page(artifact.read_text(encoding="utf-8"), artifact)
+    if args.only and args.upto:
+        raise SpecError("--only and --upto are alternatives; pass one")
+    page = build_page(artifact.read_text(encoding="utf-8"), artifact,
+                      only=args.only, upto=args.upto)
     # Validate *before* writing. The output path is deterministic and the learner is told
     # to click it, so writing first would leave an invalid page — or destroy a valid
     # earlier one — at exactly the path the engine promises is safe to open.
@@ -1665,6 +1767,13 @@ def main(argv: list[str] | None = None) -> int:
     p_render = subs.add_parser("render", help="write and validate <stem>.view.html")
     p_render.add_argument("artifact")
     p_render.add_argument("--open", action="store_true", help="open the page after writing")
+    p_render.add_argument("--only", action="append", default=[], metavar="ID",
+                          help="render just these figures (repeatable) — mid-lesson, so a "
+                               "page-only form can be delivered at its beat without "
+                               "shipping later beats' captions")
+    p_render.add_argument("--upto", default="", metavar="ID",
+                          help="render every figure up to and including this one, in "
+                               "document order — the usual mid-lesson choice")
     p_render.set_defaults(func=cmd_render)
 
     p_val = subs.add_parser("validate", help="re-check an existing view page")

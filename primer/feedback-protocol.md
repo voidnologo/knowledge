@@ -26,6 +26,8 @@ Miss types to watch for:
 - dead analogy (the framing didn't connect)
 - pacing off (rushed or dragged)
 - struggle-tolerance mismatch (learner bounced off a Socratic probe and wanted the answer) — **log it**: `primer_state.py hatch-log --domain <d>`. The "just show me" hatch is the right call in the moment, but a *rising* rate is the AI-dependence signal, and it was invisible until it was counted. `hatch-trend` reports the rate per domain over the last N lessons; read it at recalibrate as "the register is mis-set for this learner here", not as a failure.
+- **register miss** — the voice, vocabulary, or figure delivery didn't fit and the learner said so. Token: `register-miss`. This is the *Style confirmation* signal below, which the protocol asked the Primer to infer while giving it nowhere to write the result; a recurring one is a candidate anti-preference. Both instances so far traced back to the engine's own prose rather than to a per-learner preference, so check the instruction files before recording it as a trait.
+- **analogy transfer** — an analogy carried the structure across correctly and the magnitude or cost incorrectly. Token: `analogy-transfer`. Distinct from a dead analogy, which never connected: this one connected, was productive, and mispriced something. The correction differs too — keep the analogy, fix the number.
 
 ## Timescale 2 — end of each lesson (signal capture)
 
@@ -101,6 +103,9 @@ Both defaults are configurable. This replaces the old fixed "every 5 lessons": i
 2. Flip any `[status]` that the evidence clearly warrants (e.g., `[in-progress]` → `[covered]`).
 3. Apply time decay (forgetting-aware): **drift any `[confidence: high]` marker untouched for several lessons toward `med`** and flag it as a reprobe candidate; and surface — don't resolve — any `[confidence: low]` marker untouched for several lessons (a standing assumption worth a probe next time). Both are about markers going stale; the difference is high-confidence ones decay, low-confidence ones just get re-flagged.
 4. Show a 3–5 line "changed since last check" diff. Proceed into the lesson.
+5. **Close with `primer_state.py recalibrate-mark`.** It writes a positional marker into `calibration-log.md`, and everything below the last marker is what the next check counts. This is not bookkeeping for its own sake: the trigger used to compare dates across two files, so every miss logged on the same calendar day as a recalibrate was invisible — and since a recalibrate runs at session start while the session's misses are written at its end, *the common case silently dropped a whole session's evidence*.
+
+**What the trigger counts.** Only rows whose miss-type begins with a documented token (`templates/learner/calibration-log.md` holds the list; `MISS_TYPES` in `tools/primer_state.py` must agree, and a test asserts it). Rows written as annotations — `(mastery signal, not a miss)`, `(examiner outcome: agreement)` — are deliberately not counted. Counting them inverted the signal for the strongest evidence the log carries: a demonstration of mastery raised the apparent need to correct the model.
 
 Minor recalibrate does **not** rewrite stable traits or goals.
 
