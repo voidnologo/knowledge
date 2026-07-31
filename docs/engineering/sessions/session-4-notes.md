@@ -65,6 +65,91 @@ The subtler half was the **axis leak**, which the original finding missed. A der
 
 ---
 
+## Second lesson: a graphics-heavy run to exercise the figure subsystem
+
+*(Same working session; the date rolled to 2026-07-31 partway through. Kept here rather than opened as session 5 because it is one continuous sitting.)*
+
+The maintainer asked for a short, deliberately graphics-dense lesson to test the visual layer after the F-06/F-14/F-15 fixes, with three questions: **does it render inline, does it fall back to HTML for forms ASCII can't do, and do the figures arrive at the right time?** Topic pivoted to combat in *Coriolis: The Third Horizon* — chosen because it has a probability curve, a round structure, and a condition lifecycle, which between them hit every renderer path. New domain (`tabletop-rpg`), so the ledger and canon floor were both empty.
+
+Figure set: `curve` (page-only), explorable (page-only), `sequence` (ASCII), `timeline` (ASCII), `state` (page-only), plus the action-point costs as a **table**, since rows-and-columns are not a figure.
+
+### Answers to the three questions
+
+**Does it render inline? Yes, and the F-15 fix held.** Specs were authored into the `.STATE.md` sidecar and rendered with `ascii --id` at the point the prose reached them — not at Recap. The learner predicted from the rendered figure both times rather than from a prose description.
+
+**Does it fall back? Yes, cleanly.** `curve` and `state` both returned the designed message, exit 0, caption preserved:
+```
+[curve figures render on the view page only — caption: Chance of at least one success by pool size, …]
+```
+No error, no crash, and the caption still does its work, so the learner knows what they're being sent to.
+
+**Do they arrive at the right time? For ASCII forms yes; for page-only forms no** — see F-17, which is the substantive finding of this run.
+
+### The F-06 fix, verified on a real authoring case
+
+The initiative figure blanked two spans of nine on a three-actor timeline. The new rule forced a declared axis, and the render concealed position properly:
+
+```
+  mercenary (6) │█████        █████        █████         │ acts, acts, acts
+  Zenithian (5) │░░░░█████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░│ acts, ?, ?
+    cultist (2) │        ██████       ██████       ██████│ acts, acts, acts
+                └0                                     90 round 1 | 2 | 3
+```
+
+Round 1 shows her real slot; rounds 2 and 3 are an unresolved field. The learner answered *"feels like she should stay in the stair step graph"* — a genuine prediction from a figure that did not contain its own answer. Before the fix, the two blanked spans would have rendered as solid bars at their true offsets and the question would have been unaskable.
+
+The explorable also checked out. The formula compiler accepted `100 * (1 - pow(5 / 6, 2 * dice))` and emitted correct JS — `(100*(1-Math.pow(5/6,2*v["dice"]))).toFixed(1)`, no sign-concatenation, listener bound, `u()` called once on load — and the gated invariant stayed out of the pre-commit DOM. Worth verifying explicitly given this compiler shipped wrong-but-valid arithmetic at the last review.
+
+### F-16 — `recalibrate-check` is date-granular, so a same-day recalibrate hides everything logged after it
+
+After the minor recalibrate earlier in the session, `recalibrate-check` reported `fire=no | misses=0 | lessons=0` — correct in that it resets from the recalibrate, but **seven calibration entries had been appended since**, all dated the same day. They are invisible to the next check because the comparison is by date rather than by position or timestamp.
+
+Consequence: any misses logged on the same calendar day as a recalibrate are silently dropped from the trigger. Since the whole point of the evidence-triggered tier is to fire *sooner* when the model is visibly miscalibrated, losing a day's worth of evidence works directly against it — and a heavy day is exactly when it matters. Compounds with F-01, which counts the wrong rows in the first place.
+
+Fix shape: order entries within a date, or record a position/line marker at recalibrate rather than a date.
+
+### F-17 — `render` is per-file while `ascii --id` is per-figure, so a page-only figure cannot be delivered at its beat without exposing later ones
+
+The substantive finding. Rendering the sidecar at beat 1 to deliver the `curve` produced **all five figures**, including the next beat's caption — *"Success chance with and without praying to the Icons"* — which names the mechanism the learner was at that moment being asked to derive. Captions and `predict` lines are shown ungated **by design**, correctly, so the reveal gate is no defence: the spoiler is in the part that must stay visible.
+
+So the F-15 fix works for the four ASCII-renderable forms and is structurally unavailable for `curve`, `state`, and explorables. For those, "render at the beat" and "don't spoil later beats" are in direct conflict.
+
+Worked around in-lesson by staging unreached specs in a scratchpad file outside the sidecar and moving each in at its beat, re-rendering each time. That is fiddly, it is not documented anywhere, and it means the sidecar is no longer a complete checkpoint mid-lesson — which quietly weakens the cross-machine resume guarantee `lesson-template.md` makes for `.STATE.md`.
+
+Fix shape: `render --id <fig>` / `--only <ids>`, or `--upto <id>` for lesson order. Then the sidecar can hold every spec from the start, as designed, and the page channel gets the same per-figure control the terminal already has.
+
+### F-18 — the ASCII `sequence` renderer is not a diagram
+
+The learner caught this one unprompted: *"This feels like it is trying to sketch a mermaid chart but it didn't render as a chart."* He is right.
+
+```
+  player   GM   target
+
+  player ──roll ATT+skill+gear d6──▶ GM
+  GM ──no sixes - miss──▶ player
+  player ──pray: reroll non-sixes──▶ GM
+```
+
+It is a flat list of arrow rows preceded by a **vestigial participant header** that implies columns and lifelines the rows never use. The header is the actively misleading part — it sets up a spatial reading the renderer doesn't deliver. `timeline` works precisely because it *is* spatial: bars positioned on a shared axis. By `visuals.md`'s own standard this is worse than drawing what should be a table; it is a table advertising itself as a diagram.
+
+Three honest options: real lifelines with columns; drop the header and present it as the numbered list it is; or make `sequence` page-only alongside `curve` and `state`. The third is the cheapest and arguably the most honest — ASCII sequence diagrams need more width than a terminal beat should take.
+
+This is the **second** unprompted figure-delivery correction from this learner in two lessons. The visual layer is the surface he inspects most closely, which makes it the best-instrumented part of the engine and the one where sloppiness is least survivable.
+
+### F-19 — a blank is only valid relative to what has already been said
+
+Minor but worth recording as an authoring rule. The attack-exchange `sequence` was staged with its Darkness Point message blanked. By the time that beat arrived, the DP cost had been named in the previous beat, so the blank was dead — it asked a question already answered. Retargeted live onto the defender's armor roll, which had not been mentioned.
+
+Nothing in `diagramming.md` says a blank must be re-checked against the conversation before rendering. Pre-authored figure sets are exactly where this bites, and it is the same class as F-08's stale-sidecar problem, one level down: **a frozen blank against a moving conversation.**
+
+### Smaller
+
+- `sweep-record --note` has the same undocumented 400-char cap as `sources-add --why`; the subagent hit it and retried. Worth listing both limits with the commands.
+- The lesson also re-confirmed the research pass's value in a domain with no canon coverage at all: it caught that Third Horizon uses **1d6 initiative, highest-first, persistent** where the YZE SRD uses cards lowest-first, and that there is **no slow/fast action split** (3 AP instead) — two confident errors I would otherwise have taught from training, both stemming from the same cause, which is that the SRD describes a different game in the same family. It also established that **Coriolis: The Great Dark is a standalone sequel with different rules**, not a new edition.
+- Ledger behaviour on a cold domain was correct throughout: `sweep-check` → no recorded sweep → full sweep → 18 verdicts recorded including 8 drops (two of them unauthorized scans of the paid rulebook, correctly refused) → `sweep-record` → floor accreted at recap via four promotions.
+
+---
+
 ## Findings
 
 ### F-01 — `recalibrate-check` counts non-miss rows as misses
