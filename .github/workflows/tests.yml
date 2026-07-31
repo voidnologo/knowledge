@@ -29,3 +29,5 @@ jobs:
         run: python3 tools/test_primer_update.py
       - name: primer_eval tests
         run: python3 tools/test_primer_eval.py
+      - name: primer_sync tests
+        run: python3 tools/test_primer_sync.py

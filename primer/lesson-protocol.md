@@ -96,6 +96,8 @@ If the lesson carried figures, render the view page from the finished artifact (
 
 Then update the **volatile** state per `primer/feedback-protocol.md` (depth markers + ZPD edge + status → `topic-index.md`, with confidence + evidence; any calibration misses → `calibration-log.md`; retrieval prompts → `review-queue.md`; open threads → `open-questions.md`) and append one line to `learner/log.md`. Stable traits in `profile.md` change only at `recalibrate`, not here.
 
+Finally, **commit and push the instance** — `tools/primer_sync.py`, run automatically, never offered as a choice. The artifact and the learner model exist in one place until this runs, and a learner should not have to think about whether their own record survived the session. Silent on success; one line on failure.
+
 ## Anti-patterns during the protocol
 
 - Skipping Elicit because "I already know what they need" — no, you don't. The profile is days/weeks old.

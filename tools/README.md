@@ -44,6 +44,32 @@ read from `~/.config/primer/config`.
 
 Scheduler: **SM-2** (SuperMemo-2) — chosen over FSRS for transparency and zero training data (D-0020).
 
+## `primer_sync.py`
+
+Python 3.11+ stdlib only. Commits and pushes the learner's private instance repo. **Runs
+automatically at the end of every lesson** (`SKILL.md` lesson flow, final step) — it is part
+of finishing a lesson, not something the learner asks for. The instance holds the only copy
+of the artifact and of the learner model, so an uncommitted instance is an unrecoverable
+loss one crash away.
+
+```
+python3 tools/primer_sync.py [--data-dir D] [--message M] [--no-push]
+```
+
+Three properties that matter more than the convenience:
+
+- **Stages only `learner/` and `lessons/`.** A blanket `add -A` in someone's data repo would
+  sweep up whatever else they are editing and commit it under a lesson's message.
+- **Never rewrites history and never forces.** On a rejected push it rebases once — the
+  remote commits are the same learner's work from another machine — and retries. If that
+  fails it stops and says so. A data repo is exactly where a clobbering fix is unacceptable.
+- **Fails loudly, and separately from the lesson.** Non-zero exit with a message naming what
+  is and is not stored. The commit survives a failed push, so the work is never lost, only
+  un-mirrored.
+
+Applies to the **instance only**. The public core is never auto-pushed; engine changes go
+through a branch and a PR.
+
 ## `primer_view.py`
 
 Python 3.11+ stdlib only. Turns the figure specs embedded in a lesson artifact into
