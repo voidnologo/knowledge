@@ -64,11 +64,13 @@ Text paired with diagrams is one of the largest and most consistent effects in t
 **Run these as four steps, in the conversation, at the point the figure supports the prose.** Not as a description of the channels — as the actual beat:
 
 1. **Author the spec** into the in-progress `.STATE.md` sidecar, as a `<!--primer-figure ... -->` block. The extractor reads any markdown, so the sidecar is a working figure source, not just a checkpoint.
-2. **Render it into the conversation** — `primer_view.py ascii <sidecar> --id <fig>` — blanked, before the pattern is named.
+2. **Render it into the conversation** — `primer_view.py ascii <sidecar> --id <fig>` — blanked, before the pattern is named. For `curve`, `state` and explorables, which have no terminal rendering, use `primer_view.py render <sidecar> --upto <fig>` and hand over the `file://` link: `--upto` stops at the beat you have reached, where a bare `render` would ship every later figure's caption onto the page you just handed over.
 3. **Ask for a specific prediction** — "what has to happen at that step for the commit to be safe?", not "what goes there?". Wait.
 4. **Then reveal**, and refine what they said rather than replacing it.
 
-At Recap the block moves into the finished artifact, which is where it lives permanently, and `primer_view.py render` builds the page.
+**Re-check the blank against the conversation before rendering.** A blank is only meaningful relative to what has already been said, and a spec authored earlier can be answered by an intervening beat — at which point the `?` asks a question the learner has already been given. Retarget it onto something still unsaid, or drop the blank and show the figure whole. Pre-authored figure sets are where this bites.
+
+At Recap the block moves into the finished artifact, which is where it lives permanently, and a bare `primer_view.py render` builds the full page.
 
 **A figure described in prose instead of rendered is a figure the learner did not receive**, and a spec first written while assembling the artifact is a figure that never had a pedagogical role — by then the answer is known and the drawing is decoration. This is the observed failure mode, not a hypothetical: authoring a spec mid-conversation costs a tool call while describing the shape costs a sentence, so the cheaper path wins under time pressure and produces a lesson that still looks complete. If a figure is worth its `invariant`, it is worth step 1 at the moment it is needed. If it is not worth authoring then, cut it rather than deferring it.
 

@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Unit tests for primer_state. Stdlib unittest — run: python3 tools/test_primer_state.py"""
+import re
 import tempfile
 import unittest
 from datetime import date
@@ -140,10 +141,79 @@ class TestRecalibrate(unittest.TestCase):
             "2026-06-05 | recalibrate-minor | 3m | reset",
             "2026-06-10 | lesson | 60m | x",
         ]
-        calib = ["2026-06-02 | d | x | y | z", "2026-06-11 | d | x | y | z"]
+        calib = ["2026-06-02 | d | pacing | y | z", "2026-06-11 | d | vocab-gap | y | z"]
         d = ps.recalibrate_check(log_lines=log, calib_lines=calib)
         self.assertEqual(d.lessons, 1)  # only the 06-10 lesson, after the recalibrate
         self.assertEqual(d.misses, 1)   # only the 06-11 miss
+
+
+class TestMissCounting(unittest.TestCase):
+    """What the trigger counts, and from where.
+
+    Written from `feedback-protocol.md` and the calibration-log template rather than from
+    the counter: the template documents a miss-type vocabulary *and* invites annotation
+    rows, and the protocol says the tier fires "when the model is visibly miscalibrated".
+    Both were false in practice — the counter keyed on dated lines, so annotations counted,
+    and it compared dates across two files, so a session's misses vanished if a recalibrate
+    ran the same day.
+    """
+
+    LOG = ["2026-06-05 | recalibrate-minor | 3m | reset"]
+
+    def test_annotation_rows_do_not_count(self):
+        # The template documents mastery signals as legitimate content here, and counting
+        # them inverts the signal: a demonstration of mastery raised the apparent need to
+        # correct the model.
+        calib = [
+            "2026-06-06 | d | (mastery signal, not a miss) | derived it unprompted | raise",
+            "2026-06-06 | d | (intake floor-finding, not a miss) | probe | note",
+            "2026-06-06 | d | (examiner outcome: agreement) | matched | applied",
+        ]
+        self.assertEqual(ps.recalibrate_check(self.LOG, calib).misses, 0)
+
+    def test_documented_token_with_a_parenthetical_still_counts(self):
+        calib = ["2026-06-06 | d | too-advanced (intake mis-scope) | opened mid-framework | x"]
+        self.assertEqual(ps.recalibrate_check(self.LOG, calib).misses, 1)
+
+    def test_entries_on_the_recalibrate_date_are_not_dropped(self):
+        # The regression: a recalibrate runs at session start and the session's misses are
+        # logged at its end, so same-day entries are the common case, not the edge case.
+        calib = [f"2026-06-05 | d | {t} | happened | adjusted"
+                 for t in ("vocab-gap", "pacing", "retention-miss")]
+        self.assertEqual(ps.recalibrate_check(self.LOG, calib).misses, 3)
+
+    def test_a_mark_makes_counting_positional_and_date_proof(self):
+        # Two entries share the mark's date; only the one written after it counts.
+        calib = [
+            "2026-06-05 | d | pacing | before the mark | x",
+            f"2026-06-05 | (all) | {ps.RECAL_MARK_TYPE} | minor recalibrate | counts below",
+            "2026-06-05 | d | vocab-gap | after the mark | x",
+        ]
+        self.assertEqual(ps.recalibrate_check([], calib).misses, 1)
+
+    def test_the_mark_does_not_count_itself(self):
+        calib = [f"2026-06-05 | (all) | {ps.RECAL_MARK_TYPE} | minor recalibrate | x"]
+        self.assertEqual(ps.recalibrate_check([], calib).misses, 0)
+        self.assertNotIn(ps.RECAL_MARK_TYPE, ps.MISS_TYPES)
+
+    def test_the_newly_added_tokens_count(self):
+        calib = [
+            "2026-06-06 | d | register-miss | the voice was wrong | dropped it",
+            "2026-06-06 | d | analogy-transfer | right mechanism, wrong price | corrected",
+        ]
+        self.assertEqual(ps.recalibrate_check(self.LOG, calib).misses, 2)
+
+    def test_code_and_template_agree_on_the_vocabulary(self):
+        """The template-drift class, caught structurally rather than by a live run.
+
+        Three separate bugs have now come from code and a template disagreeing about what a
+        row means. The template's documented list and MISS_TYPES must be the same set.
+        """
+        template = (Path(__file__).resolve().parent.parent
+                    / "templates" / "learner" / "calibration-log.md")
+        documented = set(re.findall(r"`([a-z][a-z-]+)`", template.read_text()))
+        missing = ps.MISS_TYPES - documented
+        self.assertFalse(missing, f"in MISS_TYPES but undocumented in the template: {missing}")
 
 
 class TestCLI(unittest.TestCase):

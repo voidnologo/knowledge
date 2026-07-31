@@ -966,6 +966,118 @@ class TestAsciiLabelBudgetParity(unittest.TestCase):
             pv.ascii_figure(block)
 
 
+class TestPerFigureRender(unittest.TestCase):
+    """The page channel must be able to deliver one beat without shipping the next.
+
+    Written from the failure, not the code: rendering a sidecar to hand over one `curve`
+    emitted every figure in the file, and the next beat's caption named the mechanism the
+    learner was at that moment being asked to derive. Captions and `predict` lines are
+    ungated by design — they must be — so the reveal gate cannot help here.
+    """
+
+    def _doc(self):
+        return "\n\n".join("<!--primer-figure\n" + json.dumps(b) + "\n-->"
+                           for b in (SEQUENCE, CURVE, TIMELINE))
+
+    def _page(self, **kw):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "l.md"
+            p.write_text(self._doc())
+            return pv.build_page(p.read_text(), p, **kw)
+
+    def test_default_still_renders_everything(self):
+        self.assertEqual(len(self._page().manifest["figures"]), 3)
+
+    def test_only_renders_just_the_named_figures(self):
+        page = self._page(only=[SEQUENCE["id"]])
+        ids = [f["id"] for f in page.manifest["figures"]]
+        self.assertEqual(ids, [SEQUENCE["id"]])
+
+    def test_upto_renders_document_order_through_that_figure(self):
+        page = self._page(upto=CURVE["id"])
+        ids = [f["id"] for f in page.manifest["figures"]]
+        self.assertEqual(ids, [SEQUENCE["id"], CURVE["id"]])
+
+    def test_a_later_beats_caption_is_absent_from_an_earlier_beats_page(self):
+        # The property that actually matters, stated the way the failure was.
+        page = self._page(upto=SEQUENCE["id"])
+        self.assertIn(SEQUENCE["caption"], page.html)
+        self.assertNotIn(CURVE["caption"], page.html)
+        self.assertNotIn(TIMELINE["caption"], page.html)
+
+    def test_unknown_id_is_an_error_that_lists_what_is_there(self):
+        for kw in ({"only": ["nope"]}, {"upto": "nope"}):
+            with self.subTest(**kw), self.assertRaises(pv.SpecError) as ctx:
+                self._page(**kw)
+            self.assertIn(SEQUENCE["id"], str(ctx.exception))
+
+
+class TestAsciiSequenceIsADiagram(unittest.TestCase):
+    """`visuals.md` forbids drawing what should be a table; this renderer did the inverse.
+
+    It printed a participant header and then a flat list of `from ──label──▶ to` rows — a
+    table advertising itself as a diagram. A learner named it on sight. These assert that the
+    lanes the header promises actually exist and carry the information.
+    """
+
+    SPEC = {
+        "id": "s", "type": "sequence", "caption": "c.", "invariant": "i.",
+        "spec": {
+            "participants": [{"id": "A", "label": "alpha"}, {"id": "B", "label": "beta"},
+                             {"id": "C", "label": "gamma"}],
+            "messages": [{"id": "m1", "from": "A", "to": "B", "label": "forward"},
+                         {"id": "m2", "from": "C", "to": "A", "label": "backward"},
+                         {"id": "m3", "from": "A", "to": "C", "label": "dropped", "lost": True}],
+            "notes": [{"id": "n1", "after": "m1", "over": "B", "label": "a note"}],
+        },
+    }
+
+    def _rows(self, spec=None):
+        return pv.ascii_figure(spec or self.SPEC).splitlines()
+
+    def test_uninvolved_lanes_are_drawn_on_every_row(self):
+        # The specific defect: the header implied columns the rows never used.
+        rows = self._rows()
+        header, lifelines = rows[0], rows[1]
+        self.assertEqual(lifelines.count("│"), 3, "three participants, three lifelines")
+        for name in ("alpha", "beta", "gamma"):
+            self.assertIn(name, header)
+        body = [r for r in rows[2:] if r.strip()]
+        self.assertTrue(body)
+        for r in body:
+            self.assertTrue(any(c in r for c in "│├▶◀╳▪"),
+                            f"row carries no lane structure: {r!r}")
+
+    def test_direction_is_in_the_arrowhead_not_the_word_order(self):
+        rows = self._rows()
+        fwd = next(r for r in rows if r.endswith("forward"))
+        back = next(r for r in rows if r.endswith("backward"))
+        self.assertLess(fwd.index("├"), fwd.index("▶"), "A→B points right")
+        self.assertLess(back.index("◀"), back.index("├"), "C→A points left")
+
+    def test_a_lost_message_does_not_reach_its_target(self):
+        rows = self._rows()
+        lost = next(r for r in rows if r.endswith("dropped"))
+        self.assertIn("╳", lost)
+        self.assertNotIn("▶", lost)
+        lifelines = rows[1]
+        target_col = [i for i, c in enumerate(lifelines) if c == "│"][2]
+        self.assertLess(lost.index("╳"), target_col, "the break is short of the target lane")
+
+    def test_labels_line_up_in_one_column(self):
+        rows = [r for r in self._rows() if any(r.endswith(w)
+                for w in ("forward", "backward", "dropped", "a note"))]
+        self.assertEqual(len(rows), 4)
+        starts = {len(r) - len(r.split("  ")[-1]) for r in rows}
+        self.assertEqual(len(starts), 1, f"labels start at differing columns: {starts}")
+
+    def test_a_blanked_message_still_hides_its_label(self):
+        out = pv.ascii_figure(dict(self.SPEC, blank=["m1"], reveal="it was forward"))
+        self.assertNotIn("forward", out)
+        self.assertIn("?", out)
+        self.assertIn("backward", out)
+
+
 class TestAscii(unittest.TestCase):
     def test_renders_the_four_supported_forms(self):
         for spec in (SEQUENCE, LAYERS, QUORUM, TIMELINE):

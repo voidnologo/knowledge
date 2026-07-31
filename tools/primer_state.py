@@ -212,6 +212,38 @@ def decay_markers(lines: list[str], today: date, threshold: int) -> tuple[list[s
 # --- Recalibration trigger -------------------------------------------------
 DATED_RE = re.compile(r"^(?P<date>\d{4}-\d{2}-\d{2}) \| (?P<mode>[a-z-]+)?")
 
+# The calibration log's third field is the miss-type; DATED_RE's `mode` group lands on the
+# *domain* there, which is why counting dated lines counted every row including the ones
+# the template invites you to write as annotations.
+CALIB_RE = re.compile(
+    r"^(?P<date>\d{4}-\d{2}-\d{2}) \| (?P<domain>[^|]*) \| (?P<misstype>[^|]*) \|")
+
+# The documented miss-type vocabulary. The trigger counts a row only if its miss-type
+# *starts with* one of these tokens, so `too-advanced (intake mis-scope)` counts and
+# `(mastery signal, not a miss)` does not. Keep this in agreement with the list in
+# `templates/learner/calibration-log.md` — a token in one and not the other is the
+# template-drift class that has now produced three separate bugs.
+MISS_TYPES = frozenset({
+    "too-basic", "too-advanced", "vocab-gap", "dead-analogy", "pacing",
+    "struggle-mismatch", "retention-miss", "escape-hatch", "examiner-disagree",
+    # Added after the first live runs surfaced signals with nowhere to be written:
+    "register-miss",     # the voice/vocabulary fit is wrong — feedback-protocol's
+                         # "style confirmation" signal, which had no token to record it
+    "analogy-transfer",  # an analogy carried the structure across correctly and the
+                         # magnitude or cost incorrectly; not dead-analogy, which is an
+                         # analogy that failed to connect at all
+})
+
+# Written by `recalibrate-mark` so counting is positional within one file rather than a
+# comparison between two files' dates. Must not appear in MISS_TYPES — it would count
+# itself. See _misses_since.
+RECAL_MARK_TYPE = "recalibrate-mark"
+
+
+def _leading_token(misstype: str) -> str:
+    """The bare token at the start of a miss-type cell, ignoring any parenthetical."""
+    return re.match(r"[a-z-]*", misstype.strip()).group(0)
+
 
 @dataclass(frozen=True)
 class RecalDecision:
@@ -245,6 +277,41 @@ def _count_after(lines: list[str], since: date | None, mode: str | None = None) 
     return n
 
 
+def _misses_since(calib_lines: list[str], since: date | None) -> int:
+    """Count real misses since the last recalibrate.
+
+    Two things this gets right that counting dated lines did not:
+
+    **What counts.** Only rows whose miss-type begins with a documented token. The template
+    invites annotation rows — `(mastery signal, not a miss)`, `(intake floor-finding)` — and
+    counting those inverted the signal for the strongest evidence class the log carries: a
+    demonstration of mastery raised the apparent need to correct the model.
+
+    **Where counting starts.** Positionally, from the last `recalibrate-mark` row if one
+    exists. Comparing dates across two files meant every entry written on the same calendar
+    day as a recalibrate was invisible to the next check — and a recalibrate runs at session
+    start while the session's misses are logged at its end, so *the common case dropped a
+    whole session*. Instances predating the marker fall back to the date, now strictly
+    `<` rather than `<=`, which recovers the same-day entries for exactly that reason.
+    """
+    last_mark = max(
+        (i for i, line in enumerate(calib_lines)
+         if (m := CALIB_RE.match(line.strip()))
+         and _leading_token(m["misstype"]) == RECAL_MARK_TYPE),
+        default=None)
+    n = 0
+    for i, line in enumerate(calib_lines):
+        m = CALIB_RE.match(line.strip())
+        if not m or _leading_token(m["misstype"]) not in MISS_TYPES:
+            continue
+        if last_mark is not None:
+            if i > last_mark:
+                n += 1
+        elif since is None or date.fromisoformat(m["date"]) >= since:
+            n += 1
+    return n
+
+
 def recalibrate_check(
     log_lines: list[str],
     calib_lines: list[str],
@@ -252,7 +319,7 @@ def recalibrate_check(
     lesson_cap: int = RECAL_LESSON_CAP,
 ) -> RecalDecision:
     since = _last_recalibrate(log_lines)
-    misses = _count_after(calib_lines, since)
+    misses = _misses_since(calib_lines, since)
     lessons = _count_after(log_lines, since, mode="lesson")
     if misses >= miss_threshold:
         return RecalDecision(True, misses, lessons, f"{misses} misses ≥ {miss_threshold}")
@@ -362,6 +429,22 @@ def cmd_recalibrate_check(args: argparse.Namespace) -> int:
     )
     print(f"fire={'yes' if decision.fire else 'no'} | misses={decision.misses} "
           f"| lessons={decision.lessons} | {decision.reason}")
+    return 0
+
+
+def cmd_recalibrate_mark(args: argparse.Namespace) -> int:
+    """Record that a minor recalibrate ran, so the next check counts from here.
+
+    Writes into the calibration log rather than only `log.md` because that is the file the
+    misses live in, and a positional marker inside one file is immune to the same-day
+    ambiguity that comparing dates across two files created.
+    """
+    path = _learner(resolve_data_dir(args.data_dir), "calibration-log.md")
+    note = args.note or "minor recalibrate ran — the next check counts from below this line"
+    entry = (f"{_today(args).isoformat()} | (all) | {RECAL_MARK_TYPE} | "
+             f"minor recalibrate | {note}")
+    _write_lines(path, _read_lines(path) + [entry])
+    print(f"marked: {entry}")
     return 0
 
 
@@ -495,6 +578,11 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("recalibrate-check", help="is a minor recalibrate due?")
     p.set_defaults(func=cmd_recalibrate_check)
+
+    p = sub.add_parser("recalibrate-mark",
+                       help="record that a minor recalibrate ran (resets the miss count)")
+    p.add_argument("--note", default=None)
+    p.set_defaults(func=cmd_recalibrate_mark)
 
     p = sub.add_parser("hatch-log", help="record a 'just show me' escape-hatch use")
     p.add_argument("--domain", required=True)
