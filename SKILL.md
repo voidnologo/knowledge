@@ -98,6 +98,13 @@ Run when no instance exists. **Read `primer/intake-protocol.md` first**, then ex
    - Append any calibration misses to `$DATA_DIR/learner/calibration-log.md`. Infer the silent micro-feedback signals (calibration / engagement / mastery / style fit) from the conversation and record them — do not ask the learner.
    - Append one line to `$DATA_DIR/learner/log.md` in the form `<date> | lesson | <duration>m | <summary>` — the `lesson` mode token is what `recalibrate-check` counts.
    - Stable traits in `profile.md` change only via `recalibrate`, not here.
+9. **Store the instance. Automatically, every lesson, without asking.**
+   ```bash
+   python3 ${CLAUDE_SKILL_DIR}/tools/primer_sync.py --data-dir "$DATA_DIR"
+   ```
+   The instance holds the only copy of the artifact and of the learner model, so leaving it uncommitted puts an unrecoverable loss one crash away. This is part of finishing a lesson, not a favour to ask for. It stages only `learner/` and `lessons/`, generates a message naming the lesson, rebases once on a rejected push, and never forces. **Say nothing when it succeeds; report it in one line when it fails**, because an unpushed lesson the learner believes is stored is the outcome the step exists to prevent. A non-zero exit still means the commit exists locally.
+
+   This is the instance only. The public core is never auto-pushed — engine changes go through a branch and a PR.
 
 ## `/primer next` — Suggest next lessons
 
